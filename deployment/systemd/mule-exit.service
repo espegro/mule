@@ -1,0 +1,32 @@
+[Unit]
+Description=Mule encrypted TCP exit
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mule
+Group=mule
+ExecStart=/usr/local/bin/mule exit \
+  --listen-udp :4400 \
+  --route web=10.20.30.40:443 \
+  --route ssh=10.20.30.41:22 \
+  --secret-file /etc/mule/b-to-a.key \
+  --log-format json
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/run/mule
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

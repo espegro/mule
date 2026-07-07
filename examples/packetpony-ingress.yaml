@@ -1,0 +1,14 @@
+listen:
+  tcp: "0.0.0.0:3000"
+
+upstream:
+  address: "127.0.0.1:3100"
+  mule_route: "web"
+
+policy:
+  rate_limit: "example"
+  acl: "example"
+
+notes:
+  - "Use PacketPony for external ingress policy."
+  - "Keep mule forward bound to loopback unless it must be exposed directly."

@@ -3,9 +3,11 @@ package auth
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/hkdf"
 	"crypto/sha256"
 	"fmt"
+	"io"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 type Role string
@@ -18,7 +20,12 @@ const (
 const hkdfSalt = "mule/v1/auth"
 
 func deriveBytes(secret []byte, label string, n int) ([]byte, error) {
-	return hkdf.Key(sha256.New, secret, []byte(hkdfSalt), label, n)
+	out := make([]byte, n)
+	r := hkdf.New(sha256.New, secret, []byte(hkdfSalt), []byte(label))
+	if _, err := io.ReadFull(r, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func derivePrivateKey(secret []byte, label string) (ed25519.PrivateKey, error) {

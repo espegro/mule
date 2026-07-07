@@ -124,6 +124,40 @@ mule forward \
 
 Route IDs may contain letters, numbers, `_`, `.`, and `-`, up to 64 characters.
 
+## One Exit, Multiple Forwarders
+
+One `mule exit` can accept multiple `mule forward` instances at the same time:
+
+```text
+Host B: mule forward --forward-id host-b  -> \
+Host C: mule forward --forward-id host-c  ->  Host A: mule exit :4400 -> fixed routes
+Host D: mule forward --forward-id host-d  -> /
+```
+
+Each forwarder creates its own QUIC connection to the same exit listener. Each accepted TCP connection still becomes one QUIC bidirectional stream inside that forwarder's QUIC connection.
+
+Example forwarder on Host B:
+
+```bash
+mule forward \
+  --peer host-a.example.org:4400 \
+  --secret-file /etc/mule/b-to-a.key \
+  --forward-id host-b \
+  --listen ollama=127.0.0.1:11434
+```
+
+Example forwarder on Host C:
+
+```bash
+mule forward \
+  --peer host-a.example.org:4400 \
+  --secret-file /etc/mule/b-to-a.key \
+  --forward-id host-c \
+  --listen ssh=127.0.0.1:2222
+```
+
+With the current shared-secret model, all forwarders using the same secret are in the same trust domain and can request any route configured on the exit. Use distinct `--forward-id` values for logging, but do not treat `forward_id` as an access-control mechanism. Per-client secrets and route ACLs should be added before using one exit for independent users or machines with different trust levels.
+
 ## Logging
 
 `mule` logs to stderr and is intended to run in the foreground under systemd or another supervisor.

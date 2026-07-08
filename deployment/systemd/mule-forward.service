@@ -1,5 +1,5 @@
 [Unit]
-Description=Mule encrypted TCP forwarder
+Description=Mule encrypted TCP tunnel agent
 After=network-online.target
 Wants=network-online.target
 
@@ -7,12 +7,12 @@ Wants=network-online.target
 Type=simple
 User=mule
 Group=mule
-ExecStart=/usr/local/bin/mule forward \
-  --peer host-a.example.org:4400 \
-  --forward-id host-b \
-  --listen web=127.0.0.1:3100 \
-  --listen ssh=127.0.0.1:3101 \
-  --secret-file /etc/mule/b-to-a.key \
+ExecStart=/usr/local/bin/mule agent \
+  --server host-a.example.org:4400 \
+  --agent-id host-b \
+  --secret-file /etc/mule/host-b.key \
+  --forward web=127.0.0.1:3100 \
+  --reverse ssh=127.0.0.1:22 \
   --log-format json
 Restart=on-failure
 RestartSec=3

@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	Version     = 1
+	Version     = 2
 	MaxFrameLen = 4096
 )
 
@@ -18,6 +18,7 @@ const (
 	TypeOpen  Type = 1
 	TypeOK    Type = 2
 	TypeError Type = 3
+	TypeProbe Type = 4
 )
 
 type ErrorCode byte
@@ -29,11 +30,19 @@ const (
 	ErrorInternalError ErrorCode = 4
 )
 
+type Direction byte
+
+const (
+	DirectionForward Direction = 1
+	DirectionReverse Direction = 2
+)
+
 type Frame struct {
 	Type         Type
 	Code         ErrorCode
-	Route        string
-	ForwardID    string
+	Direction    Direction
+	Service      string
+	PeerID       string
 	Listener     string
 	SourceAddr   string
 	ConnectionID string
@@ -48,13 +57,17 @@ var (
 func WriteFrame(w io.Writer, f Frame) error {
 	body := []byte{Version, byte(f.Type)}
 	switch f.Type {
-	case TypeOpen:
+	case TypeOpen, TypeProbe:
+		if f.Direction != DirectionForward && f.Direction != DirectionReverse {
+			return ErrBadFrame
+		}
+		body = append(body, byte(f.Direction))
 		var err error
-		body, err = appendString(body, f.Route)
+		body, err = appendString(body, f.Service)
 		if err != nil {
 			return ErrFrameTooLarge
 		}
-		for _, s := range []string{f.ForwardID, f.Listener, f.SourceAddr, f.ConnectionID} {
+		for _, s := range []string{f.PeerID, f.Listener, f.SourceAddr, f.ConnectionID} {
 			body, err = appendString(body, s)
 			if err != nil {
 				return ErrFrameTooLarge
@@ -96,17 +109,21 @@ func ReadFrame(r io.Reader) (Frame, error) {
 	}
 	f := Frame{Type: Type(body[1])}
 	switch f.Type {
-	case TypeOpen:
-		rest := body[2:]
+	case TypeOpen, TypeProbe:
+		if len(body) < 3 {
+			return Frame{}, ErrBadFrame
+		}
+		f.Direction = Direction(body[2])
+		if f.Direction != DirectionForward && f.Direction != DirectionReverse {
+			return Frame{}, ErrBadFrame
+		}
+		rest := body[3:]
 		var err error
-		f.Route, rest, err = readString(rest)
+		f.Service, rest, err = readString(rest)
 		if err != nil {
 			return Frame{}, err
 		}
-		if len(rest) == 0 {
-			return f, nil
-		}
-		f.ForwardID, rest, err = readString(rest)
+		f.PeerID, rest, err = readString(rest)
 		if err != nil {
 			return Frame{}, err
 		}

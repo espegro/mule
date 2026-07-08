@@ -22,12 +22,13 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOpenFrameRoundTripWithRoute(t *testing.T) {
+func TestOpenFrameRoundTripWithService(t *testing.T) {
 	var buf bytes.Buffer
 	want := Frame{
 		Type:         TypeOpen,
-		Route:        "web",
-		ForwardID:    "host-b",
+		Direction:    DirectionForward,
+		Service:      "web",
+		PeerID:       "host-b",
 		Listener:     "127.0.0.1:3000",
 		SourceAddr:   "192.0.2.10:53144",
 		ConnectionID: "abc123",

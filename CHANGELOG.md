@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.0.0
+
+- Replace the old `forward`/`exit` model with `server`/`agent`.
+- Add first-class forward and reverse directions:
+  - forward: listener on agent, target on server
+  - reverse: listener on server, target on agent
+- Add per-agent secrets and policy keyed by verified TLS identity.
+- Add service-based control protocol with explicit `direction` and `service`.
+- Add `mule probe --direction forward|reverse --service SERVICE`.
+- Add server and agent YAML config support.
+- Drop backward compatibility with the experimental 1.x CLI and config model.
+- Add cross-platform release builds for Linux, macOS, and Windows.
+
 ## v1.1.0
 
 - Add multi-client `exit` mode with per-client secret files and route ACLs.

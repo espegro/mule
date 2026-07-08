@@ -11,4 +11,4 @@ policy:
 
 notes:
   - "Use PacketPony for external ingress policy."
-  - "Keep mule forward bound to loopback unless it must be exposed directly."
+  - "Keep the mule agent forward listener bound to loopback unless it must be exposed directly."

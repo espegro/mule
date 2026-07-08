@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const ALPN = "mule-v1"
+const ALPN = "mule-v2"
 const ExitServerName = "mule-exit"
 
 type ClientIdentity struct {
@@ -150,17 +150,17 @@ func ClientIDForTLSState(clientByPublicKey map[string]string, cs tls.ConnectionS
 }
 
 func caCertificate(secret []byte) (*x509.Certificate, ed25519.PrivateKey, error) {
-	key, err := derivePrivateKey(secret, "mule/v1/ca identity")
+	key, err := derivePrivateKey(secret, "mule/v2/ca identity")
 	if err != nil {
 		return nil, nil, err
 	}
-	serial, err := serialNumber(secret, "mule/v1/ca serial")
+	serial, err := serialNumber(secret, "mule/v2/ca serial")
 	if err != nil {
 		return nil, nil, err
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "mule v1 derived ca"},
+		Subject:               pkix.Name{CommonName: "mule v2 derived ca"},
 		NotBefore:             time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:              time.Date(2124, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
@@ -187,7 +187,7 @@ func roleCertificate(secret []byte, role Role, ca *x509.Certificate, caKey ed255
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	serial, err := serialNumber(secret, "mule/v1/"+string(role)+" certificate serial")
+	serial, err := serialNumber(secret, "mule/v2/"+string(role)+" certificate serial")
 	if err != nil {
 		return tls.Certificate{}, err
 	}

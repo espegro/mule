@@ -1,5 +1,5 @@
 [Unit]
-Description=Mule encrypted TCP exit
+Description=Mule encrypted TCP tunnel server
 After=network-online.target
 Wants=network-online.target
 
@@ -7,11 +7,11 @@ Wants=network-online.target
 Type=simple
 User=mule
 Group=mule
-ExecStart=/usr/local/bin/mule exit \
+ExecStart=/usr/local/bin/mule server \
   --listen-udp :4400 \
-  --route web=10.20.30.40:443 \
-  --route ssh=10.20.30.41:22 \
-  --secret-file /etc/mule/b-to-a.key \
+  --agent host-b=/etc/mule/host-b.key \
+  --forward web=10.20.30.40:443 \
+  --reverse ssh=127.0.0.1:2222 \
   --log-format json
 Restart=on-failure
 RestartSec=3

@@ -17,7 +17,7 @@ const (
 	RoleExit    Role = "exit"
 )
 
-const hkdfSalt = "mule/v1/auth"
+const hkdfSalt = "mule/v2/auth"
 
 func deriveBytes(secret []byte, label string, n int) ([]byte, error) {
 	out := make([]byte, n)
@@ -39,9 +39,9 @@ func derivePrivateKey(secret []byte, label string) (ed25519.PrivateKey, error) {
 func roleIdentityLabel(role Role) (string, error) {
 	switch role {
 	case RoleForward:
-		return "mule/v1/forward identity", nil
+		return "mule/v2/forward identity", nil
 	case RoleExit:
-		return "mule/v1/exit identity", nil
+		return "mule/v2/exit identity", nil
 	default:
 		return "", fmt.Errorf("unknown role %q", role)
 	}

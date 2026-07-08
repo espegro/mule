@@ -1,289 +1,276 @@
 # mule
 
-`mule` is an encrypted TCP port forwarder over QUIC/UDP.
+`mule` is an encrypted TCP service tunnel over QUIC/UDP.
 
-It is meant for controlled service access between two hosts, for example exposing a local port on one machine and forwarding it through an authenticated QUIC tunnel to a fixed service on another machine.
+It connects one or more outbound `mule agent` processes to a `mule server`. Each TCP connection becomes one QUIC bidirectional stream. Targets are always configured locally on the side that dials them; neither side can command the other side to dial an arbitrary host or port.
+
+## Model
+
+There are two roles:
 
 ```text
-client
-  -> Host B: mule forward
-  -> encrypted QUIC over UDP
-  -> Host A: mule exit
-  -> fixed TCP target
+mule server
+  listens for QUIC/UDP
+  authenticates agents
+  owns policy
+  owns reverse listeners
+
+mule agent
+  connects outbound to the server
+  owns forward listeners
+  owns reverse targets
 ```
 
-`mule` is not a VPN. It does not create TUN/TAP interfaces, change routes, forward arbitrary IP packets, implement SOCKS/HTTP CONNECT, or let clients choose destinations.
+There are two directions:
 
-## Common Uses
+```text
+forward:
+  listener lives on agent
+  target lives on server
 
-- Forward Ollama from a remote machine to a local-only port.
-- Reach SSH on a private host through one UDP opening.
-- Forward HTTPS to a fixed internal service.
-- Put PacketPony in front of `mule forward` for ingress ACLs, rate limiting, logging, and metrics.
+reverse:
+  listener lives on server
+  target lives on agent
+```
 
-## Build
+## Install
+
+Download the right release asset from:
+
+```text
+https://github.com/espegro/mule/releases
+```
+
+For Linux ARM64/AArch64:
+
+```bash
+wget -O mule https://github.com/espegro/mule/releases/download/v2.0.0/mule-linux-arm64
+chmod +x mule
+./mule version
+```
+
+Build from source:
 
 ```bash
 make build
 ```
 
-The binary is written to:
+## Keys
 
-```text
-bin/mule
-```
-
-## Create A Shared Secret
-
-Generate one high-entropy secret and install the same file on both sides:
+Each agent should have its own secret:
 
 ```bash
 install -d -m 0700 /etc/mule
 umask 077
-mule keygen --out /etc/mule/b-to-a.key
-mule check --secret-file /etc/mule/b-to-a.key
+mule keygen --out /etc/mule/dgx.key
+mule check --secret-file /etc/mule/dgx.key
 ```
 
-OpenSSL works too:
+Copy the same secret file to the server and the matching agent.
+
+Secret requirements:
+
+- local file only
+- base64 or hex encoded
+- at least 32 decoded bytes
+- Unix permissions must not be group/world-readable
+- generated randomly, not human-written
+
+## Simple Forward Example
+
+Expose Ollama on the agent side while the Ollama service runs on the server side.
+
+Server:
 
 ```bash
-install -d -m 0700 /etc/mule
-umask 077
-openssl rand -base64 32 > /etc/mule/b-to-a.key
-chmod 0600 /etc/mule/b-to-a.key
-```
-
-Secret file requirements:
-
-- Must be read from a local file.
-- Must decode as base64 or hex.
-- Must decode to at least 32 bytes.
-- On Unix, must not be group/world-readable.
-- Must be random. Do not use passwords or human-written strings.
-
-## Simple One-Port Tunnel
-
-On Host A, where the target service is reachable:
-
-```bash
-mule exit \
+mule server \
   --listen-udp :4400 \
-  --secret-file /etc/mule/b-to-a.key \
-  --target 127.0.0.1:11434
+  --agent dgx=/etc/mule/dgx.key \
+  --forward ollama=127.0.0.1:11434
 ```
 
-On Host B, where clients connect:
+Agent:
 
 ```bash
-mule forward \
-  --listen-tcp 127.0.0.1:11434 \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/b-to-a.key
+mule agent \
+  --server server.example.org:4400 \
+  --agent-id dgx \
+  --secret-file /etc/mule/dgx.key \
+  --forward ollama=127.0.0.1:10000
 ```
 
-Then clients on Host B can connect to:
+Clients on the agent machine can now use:
 
 ```text
-127.0.0.1:11434
+127.0.0.1:10000 -> QUIC tunnel -> server 127.0.0.1:11434
 ```
 
-`--listen-tcp` and `--target` are shorthand for the built-in `default` route.
+## Simple Reverse Example
 
-## Multiple Ports In One Tunnel
+Expose SSH on the server side while SSH runs on the agent side.
 
-For Ollama, SSH, and HTTPS over the same QUIC connection:
-
-Host A:
+Server:
 
 ```bash
-mule exit \
+mule server \
   --listen-udp :4400 \
-  --secret-file /etc/mule/b-to-a.key \
-  --route ollama=127.0.0.1:11434 \
-  --route ssh=127.0.0.1:22 \
-  --route https=127.0.0.1:443 \
-  --idle-timeout 1h \
-  --keepalive 20s \
-  --max-streams 200
+  --agent dgx=/etc/mule/dgx.key \
+  --reverse ssh=127.0.0.1:2222
 ```
 
-Host B:
+Agent:
 
 ```bash
-mule forward \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/b-to-a.key \
-  --forward-id host-b \
-  --listen ollama=127.0.0.1:11434 \
-  --listen ssh=127.0.0.1:2222 \
-  --listen https=127.0.0.1:8443 \
-  --idle-timeout 1h \
-  --keepalive 20s \
-  --max-connections 200
+mule agent \
+  --server server.example.org:4400 \
+  --agent-id dgx \
+  --secret-file /etc/mule/dgx.key \
+  --reverse ssh=127.0.0.1:22
 ```
 
-Route IDs may contain letters, numbers, `_`, `.`, and `-`, up to 64 characters.
+Then on the server:
 
-## One Exit, Multiple Forwarders
+```bash
+ssh -p 2222 user@127.0.0.1
+```
 
-One `mule exit` can accept multiple `mule forward` instances at the same time:
+Flow:
 
 ```text
-Host B: mule forward --forward-id host-b  -> \
-Host C: mule forward --forward-id host-c  ->  Host A: mule exit :4400 -> fixed routes
-Host D: mule forward --forward-id host-d  -> /
+server 127.0.0.1:2222
+  -> existing QUIC connection
+  -> agent 127.0.0.1:22
 ```
 
-Each forwarder creates its own QUIC connection to the same exit listener. Each accepted TCP connection still becomes one QUIC bidirectional stream inside that forwarder's QUIC connection.
+The agent only needs outbound UDP access to the server.
 
-Example forwarder on Host B:
+## Forward And Reverse Together
+
+Server:
 
 ```bash
-mule forward \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/b-to-a.key \
-  --forward-id host-b \
-  --listen ollama=127.0.0.1:11434
+mule server \
+  --listen-udp :4400 \
+  --agent dgx=/etc/mule/dgx.key \
+  --forward ollama=127.0.0.1:11434 \
+  --reverse ssh=127.0.0.1:2222
 ```
 
-Example forwarder on Host C:
+Agent:
 
 ```bash
-mule forward \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/b-to-a.key \
-  --forward-id host-c \
-  --listen ssh=127.0.0.1:2222
+mule agent \
+  --server server.example.org:4400 \
+  --agent-id dgx \
+  --secret-file /etc/mule/dgx.key \
+  --forward ollama=127.0.0.1:10000 \
+  --reverse ssh=127.0.0.1:22
 ```
 
-If all forwarders use the same secret, they are in the same trust domain and can request any route configured on the exit. Use distinct `--forward-id` values for logging, but do not treat `forward_id` as access control.
+## Multiple Agents
 
-For independent clients or machines with different trust levels, use per-client secrets and route ACLs.
+When the server has multiple agents, prefix service mappings with `agent-id:`.
 
-## Per-Client Secrets And Route ACLs
+```bash
+mule server \
+  --listen-udp :4400 \
+  --agent dgx-1=/etc/mule/dgx-1.key \
+  --agent dgx-2=/etc/mule/dgx-2.key \
+  --reverse dgx-1:ssh=127.0.0.1:2201 \
+  --reverse dgx-2:ssh=127.0.0.1:2202 \
+  --forward dgx-1:ollama=127.0.0.1:11434 \
+  --forward dgx-2:ollama=127.0.0.1:11434
+```
 
-In multi-client mode, `exit` authenticates each forwarder by its TLS public key derived from that client's secret file. The reported `forward_id` is still only logging metadata; access control uses the verified TLS identity.
+Each agent uses its own secret:
 
-Recommended exit config file:
+```bash
+mule agent \
+  --server server.example.org:4400 \
+  --agent-id dgx-1 \
+  --secret-file /etc/mule/dgx-1.key \
+  --reverse ssh=127.0.0.1:22 \
+  --forward ollama=127.0.0.1:10001
+```
+
+Only one active connection per `agent-id` is accepted.
+
+## Config Files
+
+CLI is good for simple cases. Config files are better for multiple services.
+
+Server config:
 
 ```yaml
 listen_udp: ":4400"
 idle_timeout: 1h
 keepalive: 20s
-max_streams: 200
 
-clients:
-  host-b:
-    secret_file: /etc/mule/clients/host-b.key
-    routes:
+agents:
+  dgx:
+    secret_file: /etc/mule/dgx.key
+    forward:
       ollama: 127.0.0.1:11434
-      https: 127.0.0.1:443
-
-  host-c:
-    secret_file: /etc/mule/clients/host-c.key
-    routes:
-      ssh: 127.0.0.1:22
+    reverse:
+      ssh: 127.0.0.1:2222
 ```
 
-Run it:
+Run:
 
 ```bash
-mule exit --config /etc/mule/exit.yaml
+mule server --config /etc/mule/server.yaml
 ```
 
-Host B must use the matching secret and a `--forward-id` that matches the configured client ID:
+Agent config:
+
+```yaml
+server: server.example.org:4400
+agent_id: dgx
+secret_file: /etc/mule/dgx.key
+send_client_addr: true
+
+forward:
+  ollama: 127.0.0.1:10000
+
+reverse:
+  ssh: 127.0.0.1:22
+```
+
+Run:
 
 ```bash
-mule forward \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/clients/host-b.key \
-  --forward-id host-b \
-  --listen ollama=127.0.0.1:11434 \
-  --listen https=127.0.0.1:8443
+mule agent --config /etc/mule/agent.yaml
 ```
-
-Host C:
-
-```bash
-mule forward \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/clients/host-c.key \
-  --forward-id host-c \
-  --listen ssh=127.0.0.1:2222
-```
-
-Equivalent CLI form:
-
-```bash
-mule exit \
-  --listen-udp :4400 \
-  --client host-b=/etc/mule/clients/host-b.key \
-  --client host-c=/etc/mule/clients/host-c.key \
-  --route host-b:ollama=127.0.0.1:11434 \
-  --route host-b:https=127.0.0.1:443 \
-  --route host-c:ssh=127.0.0.1:22
-```
-
-Do not mix simple mode (`--secret-file`, `--target`, simple `--route`) with multi-client mode (`--client` or config `clients`).
 
 ## Probe
 
-Use `mule probe` from the forward side to verify that QUIC, mutual authentication, and a route work:
+Probe tests QUIC authentication and service policy.
+
+Forward probe also checks that the server can dial the configured forward target:
 
 ```bash
 mule probe \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/clients/host-b.key \
-  --forward-id host-b \
-  --route ollama
+  --server server.example.org:4400 \
+  --agent-id dgx \
+  --secret-file /etc/mule/dgx.key \
+  --direction forward \
+  --service ollama
 ```
 
-`probe` opens a QUIC connection, sends an `OPEN` for the route, waits for `OK`, and then closes. A successful probe proves the route is authorized and that `exit` could dial the configured target.
-
-## Logging
-
-`mule` logs to stderr and is intended to run in the foreground under systemd or another supervisor.
-
-Useful flags:
+Reverse probe checks that the reverse service is authorized for the agent:
 
 ```bash
---log-format text
---log-format json
---log-level info
---log-level debug
+mule probe \
+  --server server.example.org:4400 \
+  --agent-id dgx \
+  --secret-file /etc/mule/dgx.key \
+  --direction reverse \
+  --service ssh
 ```
-
-`forward` sends non-sensitive connection metadata to `exit` in the `OPEN` control frame:
-
-- `route`
-- `forward_id`
-- `forward_listener`
-- `connection_id`
-- optional `source_addr`
-
-Set a stable forward identity:
-
-```bash
---forward-id host-b
-```
-
-Include the original TCP client address seen by `forward`:
-
-```bash
---send-client-addr
-```
-
-Example exit log:
-
-```text
-event=connection_closed role=exit route=ssh connection_id=084ec5fb83b8b2c1 forward_id=host-b forward_listener=127.0.0.1:2222 source_addr=192.0.2.10:53144 duration_ms=918 bytes_client_to_target=4201 bytes_target_to_client=8192
-```
-
-`source_addr` is reported by the authenticated forward instance. It is useful for operations logs, but should not be used as a security boundary on `exit`.
 
 ## Timeouts And Limits
 
-Defaults are conservative:
+Useful defaults:
 
 ```text
 connect-timeout    10s
@@ -295,121 +282,91 @@ max-streams        100
 max-pending-dials  20
 ```
 
-For SSH and Ollama, long-lived idle sessions are common. Consider:
+For SSH and Ollama, consider:
 
 ```bash
 --idle-timeout 1h
 --keepalive 20s
 ```
 
-For HTTPS with many clients, raise both sides consistently:
+## Logging
+
+Logs go to stderr and are intended for systemd/journald or another supervisor.
 
 ```bash
---max-connections 500
---max-streams 500
+--log-format text|json
+--log-level debug|info|warn|error
 ```
 
-`exit --max-pending-dials` limits concurrent target dials and protects the target during bursts.
+Connection logs include:
+
+- `agent_id`
+- `service`
+- `direction`
+- `connection_id`
+- byte counters
+- duration
+
+The agent can optionally send the original TCP client address for forward connections:
+
+```bash
+--send-client-addr
+```
+
+This is logging metadata only, not an authorization signal.
 
 ## Metrics
 
-Prometheus metrics are disabled by default. Enable them with:
+Prometheus metrics are disabled by default:
 
 ```bash
 --metrics-listen 127.0.0.1:9100
 ```
 
-The endpoint exports counters and gauges without high-cardinality labels such as client IP, route, stream ID, or connection ID.
-
-## Systemd
-
-Example unit files are included:
-
-```text
-deployment/systemd/mule-forward.service
-deployment/systemd/mule-exit.service
-```
-
-`mule` does not daemonize itself. It runs in the foreground so systemd can supervise it, collect logs, restart it, and send shutdown signals.
-
-## PacketPony In Front
-
-Use PacketPony as the public TCP ingress, then forward accepted traffic to a loopback-only Mule listener:
-
-```text
-external clients
-  -> PacketPony :3000
-  -> mule forward 127.0.0.1:3100
-  -> QUIC/UDP to Host A
-  -> fixed target route
-```
-
-Example:
-
-```bash
-mule forward \
-  --peer host-a.example.org:4400 \
-  --secret-file /etc/mule/b-to-a.key \
-  --forward-id host-b \
-  --listen web=127.0.0.1:3100
-```
-
-## Firewall
-
-Typical firewall rules:
-
-- Allow UDP `4400` from Host B to Host A.
-- Allow TCP ingress to PacketPony or `mule forward` only where clients should connect.
-- Keep `mule forward` bound to `127.0.0.1` unless it must be exposed directly.
-- The target service only needs to be reachable from Host A.
+Metrics avoid high-cardinality labels such as client IP and connection ID.
 
 ## Security Model
 
-Each shared secret deterministically derives:
+Each agent secret deterministically derives:
 
 - an internal Ed25519 CA
-- a `forward` identity
-- an `exit` identity
+- an agent identity
+- a server identity for that agent
 
-QUIC uses TLS 1.3 with mutual authentication. `mule` does not use the system CA store for tunnel authentication. Both sides verify that the peer certificate contains the expected derived Ed25519 public key.
+QUIC uses TLS 1.3 with mutual authentication. The system CA store is not used. The verified TLS identity maps to `agent_id`, and policy is enforced as:
 
-In simple mode, one secret defines one trust domain. In multi-client mode, `exit` accepts several configured client secrets and maps the verified TLS identity to a `client_id`; route ACLs are enforced as `client_id + route`.
+```text
+verified agent_id + direction + service -> allowed?
+```
 
-If the secret is wrong:
+The control protocol never carries arbitrary target host/port. Service targets are configured locally on the side that dials them:
 
-- QUIC/TLS authentication fails.
-- No stream is accepted.
-- `exit` does not dial the target.
+- forward target is configured on the server
+- reverse target is configured on the agent
 
-The forward side cannot request arbitrary destinations. It can only send a route ID, and `exit` maps that route ID to a target configured locally with `--target`, `--route`, or config-file client routes.
+If the secret is wrong, QUIC/TLS authentication fails before any target dial.
 
 ## Limitations
 
 - TCP only.
-- Fixed target routes only.
 - No client-selected destinations.
-- Original client IP is not preserved at the target.
-- Original client address can optionally be logged with `--send-client-addr`.
 - No stream/session resume after QUIC failure.
 - No SOCKS, HTTP CONNECT, UDP forwarding, TUN/TAP, routing, mesh, or automatic NAT traversal.
-- In multi-client mode, the forward `--forward-id` must match the configured client ID because it is used as TLS SNI for certificate selection. Authorization still uses the verified TLS key, not the reported metadata.
+- One active agent connection per `agent_id`.
 
 ## Troubleshooting
 
 `secret file permissions are too open`
-: Run `chmod 0600 /etc/mule/b-to-a.key`.
+: Run `chmod 0600 /etc/mule/*.key`.
 
 Authentication fails
-: Make sure both sides have identical secret file contents.
+: Check that the server and agent have matching secret files and matching `agent_id`.
 
-Clients connect and then close immediately
-: Check that `exit` can dial the configured `--target` or `--route` target.
+Reverse listener accepts and immediately closes
+: The agent is offline, the service is not configured on the agent, or the agent target cannot be dialed.
+
+Forward listener accepts and immediately closes
+: The server target cannot be dialed or the service is not authorized.
 
 QUIC does not connect
-: Check UDP firewall/NAT rules from Host B to Host A.
-
-SSH sessions drop when idle
-: Increase `--idle-timeout` and keep `--keepalive` enabled.
-
-Too many clients are rejected
-: Raise `--max-connections` on `forward` and `--max-streams` on `exit`.
+: Check UDP firewall/NAT rules from agent to server.

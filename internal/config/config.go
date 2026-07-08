@@ -13,6 +13,7 @@ const DefaultRoute = "default"
 
 var routeIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,64}$`)
 var forwardIDPattern = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
+var clientIDPattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,63}$`)
 
 type Common struct {
 	SecretFile      string
@@ -41,6 +42,8 @@ type Exit struct {
 	ListenUDP        string
 	Target           string
 	Routes           map[string]string
+	Clients          []Client
+	ClientRoutes     map[string]map[string]string
 	DialTimeout      time.Duration
 	HandshakeTimeout time.Duration
 	IdleTimeout      time.Duration
@@ -52,6 +55,15 @@ type Exit struct {
 type RouteListen struct {
 	Route   string
 	Address string
+}
+
+type Client struct {
+	ID         string
+	SecretFile string
+}
+
+func MultiClientMode(cfg Exit) bool {
+	return len(cfg.Clients) > 0 || len(cfg.ClientRoutes) > 0
 }
 
 func NormalizeForwardListens(cfg Forward) ([]RouteListen, error) {
@@ -80,6 +92,9 @@ func NormalizeForwardListens(cfg Forward) ([]RouteListen, error) {
 }
 
 func NormalizeExitRoutes(cfg Exit) (map[string]string, error) {
+	if MultiClientMode(cfg) {
+		return nil, fmt.Errorf("simple routes are not available in multi-client mode")
+	}
 	routes := make(map[string]string, len(cfg.Routes)+1)
 	if cfg.Target != "" {
 		routes[DefaultRoute] = cfg.Target
@@ -102,6 +117,53 @@ func NormalizeExitRoutes(cfg Exit) (map[string]string, error) {
 		}
 	}
 	return routes, nil
+}
+
+func NormalizeClientRoutes(cfg Exit) (map[string]map[string]string, error) {
+	if len(cfg.Clients) == 0 {
+		return nil, fmt.Errorf("at least one client is required in multi-client mode")
+	}
+	if cfg.SecretFile != "" || cfg.Target != "" || len(cfg.Routes) > 0 {
+		return nil, fmt.Errorf("do not mix --secret-file/--target/simple --route with multi-client mode")
+	}
+	seenClients := make(map[string]struct{}, len(cfg.Clients))
+	for _, client := range cfg.Clients {
+		if err := ValidateClientID(client.ID); err != nil {
+			return nil, err
+		}
+		if client.SecretFile == "" {
+			return nil, fmt.Errorf("client %q has empty secret file", client.ID)
+		}
+		if _, ok := seenClients[client.ID]; ok {
+			return nil, fmt.Errorf("duplicate client %q", client.ID)
+		}
+		seenClients[client.ID] = struct{}{}
+	}
+	out := make(map[string]map[string]string, len(cfg.ClientRoutes))
+	for clientID, routes := range cfg.ClientRoutes {
+		if _, ok := seenClients[clientID]; !ok {
+			return nil, fmt.Errorf("route configured for unknown client %q", clientID)
+		}
+		if len(routes) == 0 {
+			return nil, fmt.Errorf("client %q has no routes", clientID)
+		}
+		out[clientID] = make(map[string]string, len(routes))
+		for route, target := range routes {
+			if err := ValidateRouteID(route); err != nil {
+				return nil, err
+			}
+			if err := ValidateTCPAddress(target); err != nil {
+				return nil, err
+			}
+			out[clientID][route] = target
+		}
+	}
+	for _, client := range cfg.Clients {
+		if len(out[client.ID]) == 0 {
+			return nil, fmt.Errorf("client %q has no routes", client.ID)
+		}
+	}
+	return out, nil
 }
 
 func ParseRouteListen(v string) (RouteListen, error) {
@@ -132,6 +194,38 @@ func ParseRouteTarget(v string) (string, string, error) {
 	return route, target, nil
 }
 
+func ParseClient(v string) (Client, error) {
+	id, path, err := splitMapping(v)
+	if err != nil {
+		return Client{}, err
+	}
+	if err := ValidateClientID(id); err != nil {
+		return Client{}, err
+	}
+	return Client{ID: id, SecretFile: path}, nil
+}
+
+func ParseClientRouteTarget(v string) (string, string, string, error) {
+	left, target, err := splitMapping(v)
+	if err != nil {
+		return "", "", "", err
+	}
+	clientID, route, ok := strings.Cut(left, ":")
+	if !ok || clientID == "" || route == "" {
+		return "", "", "", fmt.Errorf("multi-client route %q must be client:route=target", v)
+	}
+	if err := ValidateClientID(clientID); err != nil {
+		return "", "", "", err
+	}
+	if err := ValidateRouteID(route); err != nil {
+		return "", "", "", err
+	}
+	if err := ValidateTCPAddress(target); err != nil {
+		return "", "", "", err
+	}
+	return clientID, route, target, nil
+}
+
 func ValidateRouteID(route string) error {
 	if !routeIDPattern.MatchString(route) {
 		return fmt.Errorf("invalid route id %q: use 1-64 chars from A-Z, a-z, 0-9, _, . or -", route)
@@ -145,6 +239,13 @@ func ValidateForwardID(id string) error {
 	}
 	if !forwardIDPattern.MatchString(id) {
 		return fmt.Errorf("invalid forward id %q: use 1-128 chars from A-Z, a-z, 0-9, _, ., : or -", id)
+	}
+	return nil
+}
+
+func ValidateClientID(id string) error {
+	if !clientIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid client id %q: use 1-63 chars from A-Z, a-z, 0-9 or -", id)
 	}
 	return nil
 }

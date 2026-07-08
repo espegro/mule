@@ -191,7 +191,11 @@ func (c *Client) getQUIC(ctx context.Context) (*quic.Conn, error) {
 	}
 	c.mu.Unlock()
 
-	tlsCfg, err := auth.TLSConfig(c.secret, auth.RoleForward)
+	serverName := auth.ExitServerName
+	if config.ValidateClientID(c.cfg.ForwardID) == nil {
+		serverName = auth.ExitServerNameForClient(c.cfg.ForwardID)
+	}
+	tlsCfg, err := auth.TLSConfigWithServerName(c.secret, auth.RoleForward, serverName)
 	if err != nil {
 		return nil, err
 	}

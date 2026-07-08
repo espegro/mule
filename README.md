@@ -156,7 +156,89 @@ mule forward \
   --listen ssh=127.0.0.1:2222
 ```
 
-With the current shared-secret model, all forwarders using the same secret are in the same trust domain and can request any route configured on the exit. Use distinct `--forward-id` values for logging, but do not treat `forward_id` as an access-control mechanism. Per-client secrets and route ACLs should be added before using one exit for independent users or machines with different trust levels.
+If all forwarders use the same secret, they are in the same trust domain and can request any route configured on the exit. Use distinct `--forward-id` values for logging, but do not treat `forward_id` as access control.
+
+For independent clients or machines with different trust levels, use per-client secrets and route ACLs.
+
+## Per-Client Secrets And Route ACLs
+
+In multi-client mode, `exit` authenticates each forwarder by its TLS public key derived from that client's secret file. The reported `forward_id` is still only logging metadata; access control uses the verified TLS identity.
+
+Recommended exit config file:
+
+```yaml
+listen_udp: ":4400"
+idle_timeout: 1h
+keepalive: 20s
+max_streams: 200
+
+clients:
+  host-b:
+    secret_file: /etc/mule/clients/host-b.key
+    routes:
+      ollama: 127.0.0.1:11434
+      https: 127.0.0.1:443
+
+  host-c:
+    secret_file: /etc/mule/clients/host-c.key
+    routes:
+      ssh: 127.0.0.1:22
+```
+
+Run it:
+
+```bash
+mule exit --config /etc/mule/exit.yaml
+```
+
+Host B must use the matching secret and a `--forward-id` that matches the configured client ID:
+
+```bash
+mule forward \
+  --peer host-a.example.org:4400 \
+  --secret-file /etc/mule/clients/host-b.key \
+  --forward-id host-b \
+  --listen ollama=127.0.0.1:11434 \
+  --listen https=127.0.0.1:8443
+```
+
+Host C:
+
+```bash
+mule forward \
+  --peer host-a.example.org:4400 \
+  --secret-file /etc/mule/clients/host-c.key \
+  --forward-id host-c \
+  --listen ssh=127.0.0.1:2222
+```
+
+Equivalent CLI form:
+
+```bash
+mule exit \
+  --listen-udp :4400 \
+  --client host-b=/etc/mule/clients/host-b.key \
+  --client host-c=/etc/mule/clients/host-c.key \
+  --route host-b:ollama=127.0.0.1:11434 \
+  --route host-b:https=127.0.0.1:443 \
+  --route host-c:ssh=127.0.0.1:22
+```
+
+Do not mix simple mode (`--secret-file`, `--target`, simple `--route`) with multi-client mode (`--client` or config `clients`).
+
+## Probe
+
+Use `mule probe` from the forward side to verify that QUIC, mutual authentication, and a route work:
+
+```bash
+mule probe \
+  --peer host-a.example.org:4400 \
+  --secret-file /etc/mule/clients/host-b.key \
+  --forward-id host-b \
+  --route ollama
+```
+
+`probe` opens a QUIC connection, sends an `OPEN` for the route, waits for `OK`, and then closes. A successful probe proves the route is authorized and that `exit` could dial the configured target.
 
 ## Logging
 
@@ -283,7 +365,7 @@ Typical firewall rules:
 
 ## Security Model
 
-The shared secret deterministically derives:
+Each shared secret deterministically derives:
 
 - an internal Ed25519 CA
 - a `forward` identity
@@ -291,13 +373,15 @@ The shared secret deterministically derives:
 
 QUIC uses TLS 1.3 with mutual authentication. `mule` does not use the system CA store for tunnel authentication. Both sides verify that the peer certificate contains the expected derived Ed25519 public key.
 
+In simple mode, one secret defines one trust domain. In multi-client mode, `exit` accepts several configured client secrets and maps the verified TLS identity to a `client_id`; route ACLs are enforced as `client_id + route`.
+
 If the secret is wrong:
 
 - QUIC/TLS authentication fails.
 - No stream is accepted.
 - `exit` does not dial the target.
 
-The forward side cannot request arbitrary destinations. It can only send a route ID, and `exit` maps that route ID to a target configured locally with `--target` or `--route`.
+The forward side cannot request arbitrary destinations. It can only send a route ID, and `exit` maps that route ID to a target configured locally with `--target`, `--route`, or config-file client routes.
 
 ## Limitations
 
@@ -308,7 +392,7 @@ The forward side cannot request arbitrary destinations. It can only send a route
 - Original client address can optionally be logged with `--send-client-addr`.
 - No stream/session resume after QUIC failure.
 - No SOCKS, HTTP CONNECT, UDP forwarding, TUN/TAP, routing, mesh, or automatic NAT traversal.
-- One shared secret currently means one shared trust domain. If many independent clients should connect to one exit, per-client secrets and route ACLs should be added.
+- In multi-client mode, the forward `--forward-id` must match the configured client ID because it is used as TLS SNI for certificate selection. Authorization still uses the verified TLS key, not the reported metadata.
 
 ## Troubleshooting
 

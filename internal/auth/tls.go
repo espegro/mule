@@ -14,8 +14,23 @@ import (
 )
 
 const ALPN = "mule-v1"
+const ExitServerName = "mule-exit"
+
+type ClientIdentity struct {
+	ID     string
+	Secret []byte
+}
+
+type MultiClientAuthenticator struct {
+	TLSConfig         *tls.Config
+	ClientByPublicKey map[string]string
+}
 
 func TLSConfig(secret []byte, role Role) (*tls.Config, error) {
+	return TLSConfigWithServerName(secret, role, ExitServerName)
+}
+
+func TLSConfigWithServerName(secret []byte, role Role, serverName string) (*tls.Config, error) {
 	peer := RoleExit
 	if role == RoleExit {
 		peer = RoleForward
@@ -41,7 +56,7 @@ func TLSConfig(secret []byte, role Role) (*tls.Config, error) {
 		MinVersion:   tls.VersionTLS13,
 		NextProtos:   []string{ALPN},
 		Certificates: []tls.Certificate{cert},
-		ServerName:   "mule-exit",
+		ServerName:   serverName,
 		RootCAs:      pool,
 		ClientCAs:    pool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
@@ -60,6 +75,78 @@ func TLSConfig(secret []byte, role Role) (*tls.Config, error) {
 		},
 	}
 	return cfg, nil
+}
+
+func ExitServerNameForClient(clientID string) string {
+	if clientID == "" {
+		return ExitServerName
+	}
+	return clientID + "." + ExitServerName
+}
+
+func MultiClientTLSConfig(clients []ClientIdentity) (*MultiClientAuthenticator, error) {
+	if len(clients) == 0 {
+		return nil, fmt.Errorf("at least one client is required")
+	}
+	certBySNI := make(map[string]*tls.Certificate, len(clients))
+	clientByPublicKey := make(map[string]string, len(clients))
+	pool := x509.NewCertPool()
+	for _, client := range clients {
+		if client.ID == "" {
+			return nil, fmt.Errorf("client id is required")
+		}
+		caCert, caKey, err := caCertificate(client.Secret)
+		if err != nil {
+			return nil, err
+		}
+		pool.AddCert(caCert)
+		cert, err := roleCertificate(client.Secret, RoleExit, caCert, caKey)
+		if err != nil {
+			return nil, err
+		}
+		certBySNI[ExitServerNameForClient(client.ID)] = &cert
+		pub, err := RolePublicKey(client.Secret, RoleForward)
+		if err != nil {
+			return nil, err
+		}
+		key := string(pub)
+		if existing, ok := clientByPublicKey[key]; ok {
+			return nil, fmt.Errorf("clients %q and %q derive the same identity", existing, client.ID)
+		}
+		clientByPublicKey[key] = client.ID
+	}
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		NextProtos: []string{ALPN},
+		ClientCAs:  pool,
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			cert, ok := certBySNI[chi.ServerName]
+			if !ok {
+				return nil, fmt.Errorf("unknown mule client SNI")
+			}
+			return cert, nil
+		},
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if _, ok := ClientIDForTLSState(clientByPublicKey, cs); !ok {
+				return fmt.Errorf("unexpected peer identity")
+			}
+			return nil
+		},
+	}
+	return &MultiClientAuthenticator{TLSConfig: cfg, ClientByPublicKey: clientByPublicKey}, nil
+}
+
+func ClientIDForTLSState(clientByPublicKey map[string]string, cs tls.ConnectionState) (string, bool) {
+	if len(cs.PeerCertificates) == 0 {
+		return "", false
+	}
+	pub, ok := cs.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
+	if !ok {
+		return "", false
+	}
+	id, ok := clientByPublicKey[string(pub)]
+	return id, ok
 }
 
 func caCertificate(secret []byte) (*x509.Certificate, ed25519.PrivateKey, error) {
@@ -109,6 +196,7 @@ func roleCertificate(secret []byte, role Role, ca *x509.Certificate, caKey ed255
 	dnsNames := []string{"mule-" + string(role)}
 	if role == RoleExit {
 		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+		dnsNames = []string{ExitServerName, "*." + ExitServerName}
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,

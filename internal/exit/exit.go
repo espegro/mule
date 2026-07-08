@@ -2,6 +2,7 @@ package exit
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"time"
@@ -23,16 +24,18 @@ type Server struct {
 	metrics *metrics.Metrics
 }
 
+type routeAuthorizer struct {
+	simple        map[string]string
+	byClient      map[string]map[string]string
+	authenticator *auth.MultiClientAuthenticator
+}
+
 func New(cfg config.Exit, secret []byte, log *logging.Logger, metrics *metrics.Metrics) *Server {
 	return &Server{cfg: cfg, secret: secret, log: log, metrics: metrics}
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	routes, err := config.NormalizeExitRoutes(s.cfg)
-	if err != nil {
-		return err
-	}
-	tlsCfg, err := auth.TLSConfig(s.secret, auth.RoleExit)
+	tlsCfg, routes, err := s.prepareAuth()
 	if err != nil {
 		return err
 	}
@@ -52,7 +55,7 @@ func (s *Server) Run(ctx context.Context) error {
 		ln.Close()
 	}()
 
-	s.log.Info("startup", "role", "exit", "listener_address", s.cfg.ListenUDP, "routes", len(routes))
+	s.log.Info("startup", "role", "exit", "listener_address", s.cfg.ListenUDP, "routes", routes.count(), "multi_client", routes.multiClient())
 	streams := make(chan struct{}, s.cfg.MaxStreams)
 	dials := make(chan struct{}, s.cfg.MaxPendingDials)
 	for {
@@ -65,15 +68,84 @@ func (s *Server) Run(ctx context.Context) error {
 			return err
 		}
 		s.metrics.QUICConnections.Add(1)
-		s.log.Info("quic_connected", "role", "exit", "peer_address", conn.RemoteAddr().String())
-		go s.handleConn(ctx, conn, streams, dials, routes)
+		clientID, ok := routes.clientID(conn.ConnectionState().TLS)
+		if !ok {
+			conn.CloseWithError(1, "unauthorized")
+			s.metrics.AuthFailuresTotal.Add(1)
+			s.log.Warn("authentication_failed", "role", "exit", "peer_address", conn.RemoteAddr().String(), "reason", "unknown_client")
+			continue
+		}
+		s.log.Info("quic_connected", "role", "exit", "peer_address", conn.RemoteAddr().String(), "client_id", clientID)
+		go s.handleConn(ctx, conn, streams, dials, routes, clientID)
 	}
 }
 
-func (s *Server) handleConn(ctx context.Context, conn *quic.Conn, streams chan struct{}, dials chan struct{}, routes map[string]string) {
+func (s *Server) prepareAuth() (*tls.Config, routeAuthorizer, error) {
+	if config.MultiClientMode(s.cfg) {
+		clientRoutes, err := config.NormalizeClientRoutes(s.cfg)
+		if err != nil {
+			return nil, routeAuthorizer{}, err
+		}
+		clients := make([]auth.ClientIdentity, 0, len(s.cfg.Clients))
+		for _, client := range s.cfg.Clients {
+			secret, err := auth.LoadSecretFile(client.SecretFile)
+			if err != nil {
+				return nil, routeAuthorizer{}, err
+			}
+			clients = append(clients, auth.ClientIdentity{ID: client.ID, Secret: secret})
+		}
+		authenticator, err := auth.MultiClientTLSConfig(clients)
+		if err != nil {
+			return nil, routeAuthorizer{}, err
+		}
+		return authenticator.TLSConfig, routeAuthorizer{byClient: clientRoutes, authenticator: authenticator}, nil
+	}
+	routes, err := config.NormalizeExitRoutes(s.cfg)
+	if err != nil {
+		return nil, routeAuthorizer{}, err
+	}
+	tlsCfg, err := auth.TLSConfig(s.secret, auth.RoleExit)
+	if err != nil {
+		return nil, routeAuthorizer{}, err
+	}
+	return tlsCfg, routeAuthorizer{simple: routes}, nil
+}
+
+func (r routeAuthorizer) count() int {
+	if r.simple != nil {
+		return len(r.simple)
+	}
+	n := 0
+	for _, routes := range r.byClient {
+		n += len(routes)
+	}
+	return n
+}
+
+func (r routeAuthorizer) multiClient() bool {
+	return r.byClient != nil
+}
+
+func (r routeAuthorizer) clientID(cs tls.ConnectionState) (string, bool) {
+	if r.authenticator == nil {
+		return "default", true
+	}
+	return auth.ClientIDForTLSState(r.authenticator.ClientByPublicKey, cs)
+}
+
+func (r routeAuthorizer) target(clientID, route string) (string, bool) {
+	if r.simple != nil {
+		target, ok := r.simple[route]
+		return target, ok
+	}
+	target, ok := r.byClient[clientID][route]
+	return target, ok
+}
+
+func (s *Server) handleConn(ctx context.Context, conn *quic.Conn, streams chan struct{}, dials chan struct{}, routes routeAuthorizer, clientID string) {
 	defer func() {
 		s.metrics.QUICConnections.Add(-1)
-		s.log.Info("quic_disconnected", "role", "exit", "peer_address", conn.RemoteAddr().String())
+		s.log.Info("quic_disconnected", "role", "exit", "peer_address", conn.RemoteAddr().String(), "client_id", clientID)
 	}()
 	for {
 		stream, err := conn.AcceptStream(ctx)
@@ -89,7 +161,7 @@ func (s *Server) handleConn(ctx context.Context, conn *quic.Conn, streams chan s
 					<-streams
 					s.metrics.ActiveQUICStreams.Add(-1)
 				}()
-				s.handleStream(ctx, stream, dials, routes)
+				s.handleStream(ctx, stream, dials, routes, clientID)
 			}()
 		default:
 			s.metrics.StreamErrorsTotal.Add(1)
@@ -107,7 +179,7 @@ func rejectOverloaded(stream *quic.Stream) {
 	_ = stream.Close()
 }
 
-func (s *Server) handleStream(ctx context.Context, stream *quic.Stream, dials chan struct{}, routes map[string]string) {
+func (s *Server) handleStream(ctx context.Context, stream *quic.Stream, dials chan struct{}, routes routeAuthorizer, clientID string) {
 	start := time.Now()
 	_ = stream.SetDeadline(time.Now().Add(s.cfg.HandshakeTimeout))
 	frame, err := protocol.ReadFrame(stream)
@@ -124,13 +196,14 @@ func (s *Server) handleStream(ctx context.Context, stream *quic.Stream, dials ch
 	}
 	logFields := []any{
 		"role", "exit",
+		"client_id", clientID,
 		"route", route,
 		"connection_id", frame.ConnectionID,
 		"forward_id", frame.ForwardID,
 		"forward_listener", frame.Listener,
 		"source_addr", frame.SourceAddr,
 	}
-	target, ok := routes[route]
+	target, ok := routes.target(clientID, route)
 	if !ok {
 		s.metrics.StreamErrorsTotal.Add(1)
 		_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorUnauthorized})

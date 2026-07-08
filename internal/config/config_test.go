@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestValidateAddress(t *testing.T) {
 	valid := []string{
@@ -83,5 +86,36 @@ func TestValidateForwardID(t *testing.T) {
 		if err := ValidateForwardID(id); err == nil {
 			t.Fatalf("%q: expected error", id)
 		}
+	}
+}
+
+func TestLoadExitFileMultiClient(t *testing.T) {
+	path := t.TempDir() + "/exit.yaml"
+	data := []byte(`
+listen_udp: ":4400"
+clients:
+  host-b:
+    secret_file: /etc/mule/host-b.key
+    routes:
+      ollama: 127.0.0.1:11434
+  host-c:
+    secret_file: /etc/mule/host-c.key
+    routes:
+      ssh: 127.0.0.1:22
+dial_timeout: 3s
+`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadExitFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ApplyExitDefaults(&cfg)
+	if cfg.ListenUDP != ":4400" || cfg.DialTimeout.String() != "3s" {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	if _, err := NormalizeClientRoutes(cfg); err != nil {
+		t.Fatal(err)
 	}
 }

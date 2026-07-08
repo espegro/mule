@@ -1,0 +1,28 @@
+[Unit]
+Description=Mule encrypted TCP tunnel agent
+
+[Service]
+Type=simple
+ExecStart=%h/bin/mule agent \
+  --server host-a.example.org:4400 \
+  --agent-id host-b \
+  --secret-file %h/.config/mule/host-b.key \
+  --forward ollama=127.0.0.1:10000 \
+  --reverse ssh=127.0.0.1:22 \
+  --log-format json
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.config/mule
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=default.target

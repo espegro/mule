@@ -315,6 +315,36 @@ The agent can optionally send the original TCP client address for forward connec
 
 This is logging metadata only, not an authorization signal.
 
+## Systemd
+
+System service examples:
+
+```text
+deployment/systemd/mule-server.service
+deployment/systemd/mule-agent.service
+```
+
+User-mode agent example:
+
+```text
+deployment/systemd/mule-agent.user.service
+```
+
+Install a user-mode agent unit as:
+
+```bash
+mkdir -p ~/.config/systemd/user ~/.config/mule
+cp deployment/systemd/mule-agent.user.service ~/.config/systemd/user/mule-agent.service
+systemctl --user daemon-reload
+systemctl --user enable --now mule-agent.service
+```
+
+To keep the user service running after logout:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
 ## Metrics
 
 Prometheus metrics are disabled by default:

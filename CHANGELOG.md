@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Rename systemd examples from `mule-forward`/`mule-exit` to `mule-agent`/`mule-server`.
+- Add a user-mode systemd agent example.
+
 ## v2.0.0
 
 - Replace the old `forward`/`exit` model with `server`/`agent`.

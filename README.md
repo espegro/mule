@@ -304,6 +304,8 @@ max-streams        100
 max-pending-dials  20
 ```
 
+Agent reconnects use exponential backoff starting at `reconnect-delay` (1s by default) and capped at one minute. The delay resets after a connection has remained stable for at least one minute.
+
 For SSH and Ollama, consider:
 
 ```bash

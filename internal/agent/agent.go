@@ -21,6 +21,11 @@ import (
 	"github.com/espegro/mule/internal/transport"
 )
 
+const (
+	maxReconnectDelay       = time.Minute
+	stableConnectionMinimum = time.Minute
+)
+
 type Config struct {
 	Server           string
 	AgentID          string
@@ -184,6 +189,9 @@ func validateConfig(cfg Config) error {
 	if len(cfg.Forward) == 0 && len(cfg.Reverse) == 0 {
 		return fmt.Errorf("at least one forward or reverse service is required")
 	}
+	if cfg.ReconnectDelay <= 0 {
+		return fmt.Errorf("reconnect_delay must be positive")
+	}
 	for service, addr := range cfg.Forward {
 		if err := config.ValidateRouteID(service); err != nil {
 			return err
@@ -204,17 +212,18 @@ func validateConfig(cfg Config) error {
 }
 
 func (a *Agent) maintainConnection(ctx context.Context) {
+	reconnectDelay := a.cfg.ReconnectDelay
 	for ctx.Err() == nil {
 		conn, err := a.dial(ctx)
 		if err != nil {
-			a.log.Warn("server_connect_failed", "role", "agent", "agent_id", a.cfg.AgentID, "reason", "connect_failed")
-			select {
-			case <-ctx.Done():
+			a.log.Warn("server_connect_failed", "role", "agent", "agent_id", a.cfg.AgentID, "reason", "connect_failed", "retry_delay_ms", reconnectDelay.Milliseconds())
+			if !waitForReconnect(ctx, reconnectDelay) {
 				return
-			case <-time.After(a.cfg.ReconnectDelay):
-				continue
 			}
+			reconnectDelay = nextReconnectDelay(reconnectDelay, a.cfg.ReconnectDelay)
+			continue
 		}
+		connectedAt := time.Now()
 		a.setConn(conn)
 		a.metrics.QUICConnections.Add(1)
 		a.log.Info("server_connected", "role", "agent", "agent_id", a.cfg.AgentID, "peer_address", a.cfg.Server)
@@ -222,7 +231,36 @@ func (a *Agent) maintainConnection(ctx context.Context) {
 		a.clearConn(conn)
 		a.metrics.QUICConnections.Add(-1)
 		a.log.Info("server_disconnected", "role", "agent", "agent_id", a.cfg.AgentID, "peer_address", a.cfg.Server)
+		if time.Since(connectedAt) >= stableConnectionMinimum {
+			reconnectDelay = a.cfg.ReconnectDelay
+		}
+		if !waitForReconnect(ctx, reconnectDelay) {
+			return
+		}
+		reconnectDelay = nextReconnectDelay(reconnectDelay, a.cfg.ReconnectDelay)
 	}
+}
+
+func waitForReconnect(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func nextReconnectDelay(current, base time.Duration) time.Duration {
+	limit := maxReconnectDelay
+	if base > limit {
+		limit = base
+	}
+	if current >= limit || current > limit/2 {
+		return limit
+	}
+	return current * 2
 }
 
 func (a *Agent) dial(ctx context.Context) (*quic.Conn, error) {

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Document GPG verification of release checksums.
+- Add bounded exponential backoff for agent reconnect attempts.
 
 ## v2.0.1 - 2026-07-10
 

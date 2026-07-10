@@ -44,7 +44,7 @@ https://github.com/espegro/mule/releases
 For Linux ARM64/AArch64:
 
 ```bash
-wget -O mule https://github.com/espegro/mule/releases/download/v2.0.0/mule-linux-arm64
+wget -O mule https://github.com/espegro/mule/releases/download/v2.0.1/mule-linux-arm64
 chmod +x mule
 ./mule version
 ```

@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## v2.0.1 - 2026-07-10
 
 - Rename systemd examples from `mule-forward`/`mule-exit` to `mule-agent`/`mule-server`.
 - Add a user-mode systemd agent example.
+- Prefer Go 1.26.5 or newer for builds and require it for releases.
+- Bound concurrent probe connections and include probe dials in the global dial limit.
+- Prevent `keygen` from overwriting existing files and validate secret file metadata on the opened file.
 
 ## v2.0.0
 

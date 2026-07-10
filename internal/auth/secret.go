@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -19,7 +20,12 @@ var (
 )
 
 func LoadSecretFile(path string) ([]byte, error) {
-	st, err := os.Stat(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("open secret file: %w", err)
+	}
+	defer f.Close()
+	st, err := f.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat secret file: %w", err)
 	}
@@ -30,7 +36,7 @@ func LoadSecretFile(path string) ([]byte, error) {
 		return nil, fmt.Errorf("secret file permissions %04o are too open; use 0600 or stricter", st.Mode().Perm())
 	}
 
-	data, err := os.ReadFile(path)
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("read secret file: %w", err)
 	}
@@ -70,5 +76,16 @@ func GenerateSecretFile(path string) error {
 		return fmt.Errorf("generate secret: %w", err)
 	}
 	encoded := base64.StdEncoding.EncodeToString(secret) + "\n"
-	return os.WriteFile(path, []byte(encoded), 0o600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("create secret file: %w", err)
+	}
+	if _, err := f.WriteString(encoded); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write secret file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close secret file: %w", err)
+	}
+	return nil
 }

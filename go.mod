@@ -2,6 +2,8 @@ module github.com/espegro/mule
 
 go 1.24
 
+toolchain go1.26.5
+
 require (
 	github.com/quic-go/quic-go v0.55.0
 	golang.org/x/crypto v0.41.0

@@ -73,6 +73,23 @@ func TestLoadSecretFileRejectsOpenPermissions(t *testing.T) {
 	}
 }
 
+func TestGenerateSecretFileDoesNotOverwrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "key")
+	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := GenerateSecretFile(path); err == nil {
+		t.Fatal("expected existing file error")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "keep" {
+		t.Fatalf("existing file was changed: %q", data)
+	}
+}
+
 func TestDerivedIdentitiesAreDeterministicAndDifferent(t *testing.T) {
 	secret := make([]byte, MinSecretBytes)
 	for i := range secret {

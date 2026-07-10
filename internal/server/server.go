@@ -191,6 +191,7 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 
 	dials := make(chan struct{}, s.cfg.MaxPendingDials)
+	probes := make(chan struct{}, s.cfg.MaxPendingDials)
 	s.log.Info("startup", "role", "server", "listener_address", s.cfg.ListenUDP, "agents", len(s.cfg.Agents))
 	for {
 		conn, err := ln.Accept(ctx)
@@ -208,8 +209,17 @@ func (s *Server) Run(ctx context.Context) error {
 			continue
 		}
 		if !s.register(agentID, conn) {
+			select {
+			case probes <- struct{}{}:
+			default:
+				conn.CloseWithError(2, "probe capacity exceeded")
+				continue
+			}
 			s.log.Info("probe_connection_accepted", "role", "server", "agent_id", agentID, "peer_address", conn.RemoteAddr().String())
-			go s.handleProbeConnection(ctx, agentID, conn)
+			go func() {
+				defer func() { <-probes }()
+				s.handleProbeConnection(ctx, agentID, conn, dials)
+			}()
 			continue
 		}
 		s.metrics.QUICConnections.Add(1)
@@ -296,7 +306,7 @@ func (s *Server) handleAgent(ctx context.Context, agentID string, conn *quic.Con
 	}
 }
 
-func (s *Server) handleProbeConnection(ctx context.Context, agentID string, conn *quic.Conn) {
+func (s *Server) handleProbeConnection(ctx context.Context, agentID string, conn *quic.Conn, dials chan struct{}) {
 	defer conn.CloseWithError(0, "probe complete")
 	for {
 		stream, err := conn.AcceptStream(ctx)
@@ -311,7 +321,7 @@ func (s *Server) handleProbeConnection(ctx context.Context, agentID string, conn
 				_ = stream.Close()
 				return
 			}
-			s.handleProbe(ctx, agentID, stream, frame)
+			s.handleProbe(ctx, agentID, stream, frame, dials)
 		}(stream)
 	}
 }
@@ -326,7 +336,7 @@ func (s *Server) handleAgentStream(ctx context.Context, agentID string, stream *
 		return
 	}
 	if frame.Type == protocol.TypeProbe {
-		s.handleProbe(ctx, agentID, stream, frame)
+		s.handleProbe(ctx, agentID, stream, frame, dials)
 		return
 	}
 	if frame.Type != protocol.TypeOpen || frame.Direction != protocol.DirectionForward {
@@ -367,12 +377,20 @@ func (s *Server) handleAgentStream(ctx context.Context, agentID string, stream *
 	s.log.Info("connection_closed", "role", "server", "agent_id", agentID, "service", frame.Service, "direction", "forward", "connection_id", frame.ConnectionID, "duration_ms", time.Since(start).Milliseconds(), "bytes_client_to_target", count.BToA, "bytes_target_to_client", count.AToB)
 }
 
-func (s *Server) handleProbe(ctx context.Context, agentID string, stream *quic.Stream, frame protocol.Frame) {
+func (s *Server) handleProbe(ctx context.Context, agentID string, stream *quic.Stream, frame protocol.Frame, dials chan struct{}) {
 	switch frame.Direction {
 	case protocol.DirectionForward:
 		target, ok := s.forwardTarget(agentID, frame.Service)
 		if !ok {
 			_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorUnauthorized})
+			_ = stream.Close()
+			return
+		}
+		select {
+		case dials <- struct{}{}:
+			defer func() { <-dials }()
+		default:
+			_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorOverloaded})
 			_ = stream.Close()
 			return
 		}

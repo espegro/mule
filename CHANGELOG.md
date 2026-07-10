@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Document GPG verification of release checksums.
+
 ## v2.0.1 - 2026-07-10
 
 - Rename systemd examples from `mule-forward`/`mule-exit` to `mule-agent`/`mule-server`.

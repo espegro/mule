@@ -55,6 +55,28 @@ Build from source:
 make build
 ```
 
+### Verify a release
+
+Release checksums are signed with this OpenPGP key:
+
+```text
+AF14 E838 23D9 1A8D D2C7 C0A4 50AE 70D7 9132 0122
+```
+
+Import the public key from GitHub and verify its fingerprint before trusting it:
+
+```bash
+curl -fsSL https://github.com/espegro.gpg | gpg --import
+gpg --fingerprint 50AE70D791320122
+```
+
+Download the release files, `checksums.txt`, and `checksums.txt.asc` into the same directory, then run:
+
+```bash
+gpg --verify checksums.txt.asc checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+```
+
 ## Keys
 
 Each agent should have its own secret:

@@ -1,0 +1,13 @@
+listen_udp: ":4400"
+idle_timeout: 1h
+keepalive: 20s
+
+agents:
+  agent-a:
+    secret_file: /etc/mule/agent-a.key
+    forward:
+      app-on-b: 127.0.0.1:2202
+  agent-b:
+    secret_file: /etc/mule/agent-b.key
+    reverse:
+      app: 127.0.0.1:2202

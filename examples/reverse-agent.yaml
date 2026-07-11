@@ -1,0 +1,8 @@
+server: server.example.org:4400
+agent_id: lab
+secret_file: /etc/mule/lab.key
+idle_timeout: 1h
+keepalive: 20s
+
+reverse:
+  ssh: 127.0.0.1:22

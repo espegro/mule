@@ -1,0 +1,6 @@
+server: server.example.org:4400
+agent_id: agent-b
+secret_file: /etc/mule/agent-b.key
+
+reverse:
+  app: 127.0.0.1:8080

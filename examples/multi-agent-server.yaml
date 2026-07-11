@@ -1,0 +1,17 @@
+listen_udp: ":4400"
+idle_timeout: 1h
+keepalive: 20s
+
+agents:
+  gpu-1:
+    secret_file: /etc/mule/gpu-1.key
+    forward:
+      ollama: 127.0.0.1:11434
+    reverse:
+      ssh: 127.0.0.1:2201
+  gpu-2:
+    secret_file: /etc/mule/gpu-2.key
+    forward:
+      ollama: 127.0.0.1:11434
+    reverse:
+      ssh: 127.0.0.1:2202

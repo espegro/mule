@@ -1,0 +1,11 @@
+listen_udp: ":4400"
+idle_timeout: 1h
+keepalive: 20s
+
+agents:
+  lab:
+    secret_file: /etc/mule/lab.key
+    forward:
+      web: 127.0.0.1:3000
+    reverse:
+      ssh: 127.0.0.1:2222

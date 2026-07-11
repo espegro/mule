@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add ready-to-run YAML examples for forward, reverse, combined, multi-agent, and explicit agent-to-agent lab setups.
+
 ## v2.0.2 - 2026-07-11
 
 - Document GPG verification of release checksums.

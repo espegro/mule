@@ -1,0 +1,12 @@
+server: server.example.org:4400
+agent_id: lab
+secret_file: /etc/mule/lab.key
+idle_timeout: 1h
+keepalive: 20s
+send_client_addr: true
+
+forward:
+  web: 127.0.0.1:8080
+
+reverse:
+  ssh: 127.0.0.1:22

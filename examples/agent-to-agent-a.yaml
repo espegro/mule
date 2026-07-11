@@ -1,0 +1,6 @@
+server: server.example.org:4400
+agent_id: agent-a
+secret_file: /etc/mule/agent-a.key
+
+forward:
+  app-on-b: 127.0.0.1:9000

@@ -16,6 +16,10 @@ type Logger struct {
 }
 
 func New(format, level string) *Logger {
+	return NewForWriter(format, level, os.Stderr)
+}
+
+func NewForWriter(format, level string, out io.Writer) *Logger {
 	lvl := slog.LevelInfo
 	switch level {
 	case "debug":
@@ -25,7 +29,7 @@ func New(format, level string) *Logger {
 	case "error":
 		lvl = slog.LevelError
 	}
-	return &Logger{format: format, level: lvl, out: os.Stderr}
+	return &Logger{format: format, level: lvl, out: out}
 }
 
 func (l *Logger) Debug(event string, fields ...any) { l.log(slog.LevelDebug, event, fields...) }

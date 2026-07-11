@@ -141,6 +141,11 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := validateConfig(s.cfg); err != nil {
 		return err
 	}
+	agentIDs := make([]string, 0, len(s.cfg.Agents))
+	for _, agent := range s.cfg.Agents {
+		agentIDs = append(agentIDs, agent.ID)
+	}
+	s.metrics.ConfigureServer(agentIDs)
 	clients := make([]auth.ClientIdentity, 0, len(s.cfg.Agents))
 	for _, agent := range s.cfg.Agents {
 		secret, err := auth.LoadSecretFile(agent.SecretFile)
@@ -208,6 +213,7 @@ func (s *Server) Run(ctx context.Context) error {
 			s.metrics.AuthFailuresTotal.Add(1)
 			continue
 		}
+		s.log.Debug("quic_peer_authenticated", "role", "server", "agent_id", agentID, "peer_address", conn.RemoteAddr().String())
 		if !s.register(agentID, conn) {
 			select {
 			case probes <- struct{}{}:
@@ -223,6 +229,7 @@ func (s *Server) Run(ctx context.Context) error {
 			continue
 		}
 		s.metrics.QUICConnections.Add(1)
+		s.metrics.SetAgentConnected(agentID, true)
 		s.log.Info("agent_connected", "role", "server", "agent_id", agentID, "peer_address", conn.RemoteAddr().String())
 		go s.handleAgent(ctx, agentID, conn, dials)
 	}
@@ -295,6 +302,7 @@ func (s *Server) handleAgent(ctx context.Context, agentID string, conn *quic.Con
 	defer func() {
 		s.unregister(agentID, conn)
 		s.metrics.QUICConnections.Add(-1)
+		s.metrics.SetAgentConnected(agentID, false)
 		s.log.Info("agent_disconnected", "role", "server", "agent_id", agentID, "peer_address", conn.RemoteAddr().String())
 	}()
 	for {
@@ -302,6 +310,7 @@ func (s *Server) handleAgent(ctx context.Context, agentID string, conn *quic.Con
 		if err != nil {
 			return
 		}
+		s.log.Debug("stream_accepted", "role", "server", "agent_id", agentID)
 		go s.handleAgentStream(ctx, agentID, stream, dials)
 	}
 }
@@ -327,14 +336,20 @@ func (s *Server) handleProbeConnection(ctx context.Context, agentID string, conn
 }
 
 func (s *Server) handleAgentStream(ctx context.Context, agentID string, stream *quic.Stream, dials chan struct{}) {
+	s.metrics.StreamsTotal.Add(1)
+	s.metrics.ActiveQUICStreams.Add(1)
+	defer s.metrics.ActiveQUICStreams.Add(-1)
 	start := time.Now()
 	_ = stream.SetDeadline(time.Now().Add(s.cfg.HandshakeTimeout))
 	frame, err := protocol.ReadFrame(stream)
 	if err != nil {
+		s.metrics.StreamErrorsTotal.Add(1)
+		s.log.Debug("control_frame_error", "role", "server", "agent_id", agentID, "error", err)
 		_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorUnauthorized})
 		_ = stream.Close()
 		return
 	}
+	s.log.Debug("control_frame_received", "role", "server", "agent_id", agentID, "type", frame.Type, "direction", frame.Direction, "service", frame.Service, "connection_id", frame.ConnectionID)
 	if frame.Type == protocol.TypeProbe {
 		s.handleProbe(ctx, agentID, stream, frame, dials)
 		return
@@ -360,20 +375,30 @@ func (s *Server) handleAgentStream(ctx context.Context, agentID string, stream *
 		return
 	}
 	dialer := net.Dialer{Timeout: s.cfg.DialTimeout}
+	s.log.Debug("target_dial_started", "role", "server", "agent_id", agentID, "service", frame.Service, "direction", "forward", "target_address", target, "connection_id", frame.ConnectionID)
 	tcpConn, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
+		s.metrics.TargetDialErrors.Add(1)
+		s.metrics.StreamErrorsTotal.Add(1)
+		s.log.Debug("target_dial_error", "role", "server", "agent_id", agentID, "service", frame.Service, "direction", "forward", "target_address", target, "connection_id", frame.ConnectionID, "error", err)
 		_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorDialFailed})
 		_ = stream.Close()
 		s.log.Warn("target_dial_failed", "role", "server", "agent_id", agentID, "service", frame.Service, "direction", "forward", "target_address", target)
 		return
 	}
 	defer tcpConn.Close()
+	s.metrics.TCPConnectionsTotal.Add(1)
+	s.metrics.ActiveTCPConnections.Add(1)
+	defer s.metrics.ActiveTCPConnections.Add(-1)
+	s.log.Debug("target_dial_succeeded", "role", "server", "agent_id", agentID, "service", frame.Service, "direction", "forward", "target_address", target, "connection_id", frame.ConnectionID)
 	if err := protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeOK}); err != nil {
 		_ = stream.Close()
 		return
 	}
 	_ = stream.SetDeadline(time.Time{})
 	count := transport.Pipe(tcpConn, stream)
+	s.metrics.BytesClientToTarget.Add(count.BToA)
+	s.metrics.BytesTargetToClient.Add(count.AToB)
 	s.log.Info("connection_closed", "role", "server", "agent_id", agentID, "service", frame.Service, "direction", "forward", "connection_id", frame.ConnectionID, "duration_ms", time.Since(start).Milliseconds(), "bytes_client_to_target", count.BToA, "bytes_target_to_client", count.AToB)
 }
 
@@ -453,6 +478,9 @@ func (s *Server) acceptReverse(ctx context.Context, ln net.Listener, agentID, se
 
 func (s *Server) handleReverseTCP(ctx context.Context, tcpConn net.Conn, agentID, service, listener string) {
 	defer tcpConn.Close()
+	s.metrics.TCPConnectionsTotal.Add(1)
+	s.metrics.ActiveTCPConnections.Add(1)
+	defer s.metrics.ActiveTCPConnections.Add(-1)
 	start := time.Now()
 	connectionID := newConnectionID()
 	conn := s.conn(agentID)
@@ -464,9 +492,15 @@ func (s *Server) handleReverseTCP(ctx context.Context, tcpConn net.Conn, agentID
 	defer cancel()
 	stream, err := conn.OpenStreamSync(openCtx)
 	if err != nil {
+		s.metrics.StreamErrorsTotal.Add(1)
+		s.log.Debug("stream_open_error", "role", "server", "agent_id", agentID, "service", service, "direction", "reverse", "connection_id", connectionID, "error", err)
 		s.log.Warn("reverse_rejected", "role", "server", "agent_id", agentID, "service", service, "reason", "open_stream_failed")
 		return
 	}
+	s.metrics.StreamsTotal.Add(1)
+	s.metrics.ActiveQUICStreams.Add(1)
+	defer s.metrics.ActiveQUICStreams.Add(-1)
+	s.log.Debug("stream_opened", "role", "server", "agent_id", agentID, "service", service, "direction", "reverse", "connection_id", connectionID)
 	_ = stream.SetDeadline(time.Now().Add(s.cfg.HandshakeTimeout))
 	if err := protocol.WriteFrame(stream, protocol.Frame{
 		Type:         protocol.TypeOpen,
@@ -487,6 +521,8 @@ func (s *Server) handleReverseTCP(ctx context.Context, tcpConn net.Conn, agentID
 	}
 	_ = stream.SetDeadline(time.Time{})
 	count := transport.Pipe(tcpConn, stream)
+	s.metrics.BytesClientToTarget.Add(count.AToB)
+	s.metrics.BytesTargetToClient.Add(count.BToA)
 	s.log.Info("connection_closed", "role", "server", "agent_id", agentID, "service", service, "direction", "reverse", "connection_id", connectionID, "duration_ms", time.Since(start).Milliseconds(), "bytes_client_to_target", count.AToB, "bytes_target_to_client", count.BToA)
 }
 

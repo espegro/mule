@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## v2.0.2 - 2026-07-11
 
 - Document GPG verification of release checksums.
 - Add bounded exponential backoff for agent reconnect attempts.
+- Add JSON connection status on `/status`, functional connection metrics, and useful connection/stream debug logging.
 
 ## v2.0.1 - 2026-07-10
 

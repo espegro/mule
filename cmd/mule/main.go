@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -112,6 +113,7 @@ func runServer(args []string) error {
 		return err
 	}
 	log := logging.New(common.LogFormat, common.LogLevel)
+	warnMetricsExposure(log, common.MetricsListen)
 	m := metrics.New()
 	return runWithMetrics(common, m, func(ctx context.Context) error {
 		return server.New(cfg, log, m).Run(ctx)
@@ -175,6 +177,7 @@ func runAgent(args []string) error {
 		return err
 	}
 	log := logging.New(common.LogFormat, common.LogLevel)
+	warnMetricsExposure(log, common.MetricsListen)
 	m := metrics.New()
 	return runWithMetrics(common, m, func(ctx context.Context) error {
 		return agent.New(cfg, secret, log, m).Run(ctx)
@@ -425,5 +428,19 @@ func runWithMetrics(common config.Common, m *metrics.Metrics, fn func(context.Co
 		case <-timeout.C:
 			return errors.New("shutdown timed out")
 		}
+	}
+}
+
+func warnMetricsExposure(log *logging.Logger, addr string) {
+	if addr == "" {
+		return
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return
+	}
+	ip := net.ParseIP(host)
+	if host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+		log.Warn("metrics_listener_exposed", "listener_address", addr, "reason", "status_and_metrics_have_no_authentication")
 	}
 }

@@ -44,7 +44,7 @@ https://github.com/espegro/mule/releases
 For Linux ARM64/AArch64:
 
 ```bash
-wget -O mule https://github.com/espegro/mule/releases/download/v2.0.1/mule-linux-arm64
+wget -O mule https://github.com/espegro/mule/releases/download/v2.0.2/mule-linux-arm64
 chmod +x mule
 ./mule version
 ```
@@ -378,6 +378,18 @@ Prometheus metrics are disabled by default:
 ```
 
 Metrics avoid high-cardinality labels such as client IP and connection ID.
+
+The same local HTTP listener exposes connection status as JSON:
+
+```bash
+curl -s http://127.0.0.1:9100/status
+```
+
+Agent status includes `connected`, `agent_id`, and `server`. Server status includes a sorted `connected_agents` list and `configured_agent_count`.
+
+The status and metrics listener has no authentication. Bind it to loopback unless the surrounding network is trusted; Mule logs a warning for non-loopback listeners.
+
+Use `--log-level debug` to log connection attempts, authenticated QUIC peers, stream lifecycle, control frames, and target dials. Debug logs include service and connection identifiers, but never secrets or tunneled payloads.
 
 ## Security Model
 

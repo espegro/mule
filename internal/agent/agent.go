@@ -149,6 +149,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := validateConfig(a.cfg); err != nil {
 		return err
 	}
+	a.metrics.ConfigureAgent(a.cfg.AgentID, a.cfg.Server)
 	go a.maintainConnection(ctx)
 
 	sem := make(chan struct{}, a.cfg.MaxConnections)
@@ -214,8 +215,10 @@ func validateConfig(cfg Config) error {
 func (a *Agent) maintainConnection(ctx context.Context) {
 	reconnectDelay := a.cfg.ReconnectDelay
 	for ctx.Err() == nil {
+		a.log.Debug("server_connect_started", "role", "agent", "agent_id", a.cfg.AgentID, "peer_address", a.cfg.Server)
 		conn, err := a.dial(ctx)
 		if err != nil {
+			a.log.Debug("server_connect_error", "role", "agent", "agent_id", a.cfg.AgentID, "peer_address", a.cfg.Server, "error", err)
 			a.log.Warn("server_connect_failed", "role", "agent", "agent_id", a.cfg.AgentID, "reason", "connect_failed", "retry_delay_ms", reconnectDelay.Milliseconds())
 			if !waitForReconnect(ctx, reconnectDelay) {
 				return
@@ -226,10 +229,12 @@ func (a *Agent) maintainConnection(ctx context.Context) {
 		connectedAt := time.Now()
 		a.setConn(conn)
 		a.metrics.QUICConnections.Add(1)
+		a.metrics.SetAgentConnected(a.cfg.AgentID, true)
 		a.log.Info("server_connected", "role", "agent", "agent_id", a.cfg.AgentID, "peer_address", a.cfg.Server)
 		a.acceptReverse(ctx, conn)
 		a.clearConn(conn)
 		a.metrics.QUICConnections.Add(-1)
+		a.metrics.SetAgentConnected(a.cfg.AgentID, false)
 		a.log.Info("server_disconnected", "role", "agent", "agent_id", a.cfg.AgentID, "peer_address", a.cfg.Server)
 		if time.Since(connectedAt) >= stableConnectionMinimum {
 			reconnectDelay = a.cfg.ReconnectDelay
@@ -341,18 +346,28 @@ func (a *Agent) acceptForward(ctx context.Context, ln net.Listener, service stri
 
 func (a *Agent) handleForwardTCP(ctx context.Context, tcpConn net.Conn, service, listener string) {
 	defer tcpConn.Close()
+	a.metrics.TCPConnectionsTotal.Add(1)
+	a.metrics.ActiveTCPConnections.Add(1)
+	defer a.metrics.ActiveTCPConnections.Add(-1)
 	start := time.Now()
 	connectionID := newConnectionID()
 	conn, err := a.getConn(ctx)
 	if err != nil {
+		a.log.Debug("forward_connection_error", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "connection_id", connectionID, "error", err)
 		return
 	}
 	openCtx, cancel := context.WithTimeout(ctx, a.cfg.HandshakeTimeout)
 	defer cancel()
 	stream, err := conn.OpenStreamSync(openCtx)
 	if err != nil {
+		a.metrics.StreamErrorsTotal.Add(1)
+		a.log.Debug("stream_open_error", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "direction", "forward", "connection_id", connectionID, "error", err)
 		return
 	}
+	a.metrics.StreamsTotal.Add(1)
+	a.metrics.ActiveQUICStreams.Add(1)
+	defer a.metrics.ActiveQUICStreams.Add(-1)
+	a.log.Debug("stream_opened", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "direction", "forward", "connection_id", connectionID)
 	_ = stream.SetDeadline(time.Now().Add(a.cfg.HandshakeTimeout))
 	sourceAddr := ""
 	if a.cfg.SendClientAddr {
@@ -367,16 +382,22 @@ func (a *Agent) handleForwardTCP(ctx context.Context, tcpConn net.Conn, service,
 		SourceAddr:   sourceAddr,
 		ConnectionID: connectionID,
 	}); err != nil {
+		a.metrics.StreamErrorsTotal.Add(1)
+		a.log.Debug("control_frame_write_error", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "direction", "forward", "connection_id", connectionID, "error", err)
 		_ = stream.Close()
 		return
 	}
 	resp, err := protocol.ReadFrame(stream)
 	if err != nil || resp.Type != protocol.TypeOK {
+		a.metrics.StreamErrorsTotal.Add(1)
+		a.log.Debug("control_response_error", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "direction", "forward", "connection_id", connectionID, "response_type", resp.Type, "error", err)
 		_ = stream.Close()
 		return
 	}
 	_ = stream.SetDeadline(time.Time{})
 	count := transport.Pipe(tcpConn, stream)
+	a.metrics.BytesClientToTarget.Add(count.AToB)
+	a.metrics.BytesTargetToClient.Add(count.BToA)
 	a.log.Info("connection_closed", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "direction", "forward", "connection_id", connectionID, "duration_ms", time.Since(start).Milliseconds(), "bytes_client_to_target", count.AToB, "bytes_target_to_client", count.BToA)
 }
 
@@ -386,19 +407,26 @@ func (a *Agent) acceptReverse(ctx context.Context, conn *quic.Conn) {
 		if err != nil {
 			return
 		}
+		a.log.Debug("stream_accepted", "role", "agent", "agent_id", a.cfg.AgentID, "direction", "reverse")
 		go a.handleReverseStream(ctx, stream)
 	}
 }
 
 func (a *Agent) handleReverseStream(ctx context.Context, stream *quic.Stream) {
+	a.metrics.StreamsTotal.Add(1)
+	a.metrics.ActiveQUICStreams.Add(1)
+	defer a.metrics.ActiveQUICStreams.Add(-1)
 	start := time.Now()
 	_ = stream.SetDeadline(time.Now().Add(a.cfg.HandshakeTimeout))
 	frame, err := protocol.ReadFrame(stream)
 	if err != nil || frame.Type != protocol.TypeOpen || frame.Direction != protocol.DirectionReverse {
+		a.metrics.StreamErrorsTotal.Add(1)
+		a.log.Debug("control_frame_error", "role", "agent", "agent_id", a.cfg.AgentID, "direction", "reverse", "error", err)
 		_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorUnauthorized})
 		_ = stream.Close()
 		return
 	}
+	a.log.Debug("control_frame_received", "role", "agent", "agent_id", a.cfg.AgentID, "type", frame.Type, "direction", frame.Direction, "service", frame.Service, "connection_id", frame.ConnectionID)
 	target, ok := a.cfg.Reverse[frame.Service]
 	if !ok {
 		_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorUnauthorized})
@@ -406,19 +434,29 @@ func (a *Agent) handleReverseStream(ctx context.Context, stream *quic.Stream) {
 		return
 	}
 	dialer := net.Dialer{Timeout: a.cfg.ConnectTimeout}
+	a.log.Debug("target_dial_started", "role", "agent", "agent_id", a.cfg.AgentID, "service", frame.Service, "direction", "reverse", "target_address", target, "connection_id", frame.ConnectionID)
 	tcpConn, err := dialer.DialContext(ctx, "tcp", target)
 	if err != nil {
+		a.metrics.TargetDialErrors.Add(1)
+		a.metrics.StreamErrorsTotal.Add(1)
+		a.log.Debug("target_dial_error", "role", "agent", "agent_id", a.cfg.AgentID, "service", frame.Service, "direction", "reverse", "target_address", target, "connection_id", frame.ConnectionID, "error", err)
 		_ = protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeError, Code: protocol.ErrorDialFailed})
 		_ = stream.Close()
 		return
 	}
 	defer tcpConn.Close()
+	a.metrics.TCPConnectionsTotal.Add(1)
+	a.metrics.ActiveTCPConnections.Add(1)
+	defer a.metrics.ActiveTCPConnections.Add(-1)
+	a.log.Debug("target_dial_succeeded", "role", "agent", "agent_id", a.cfg.AgentID, "service", frame.Service, "direction", "reverse", "target_address", target, "connection_id", frame.ConnectionID)
 	if err := protocol.WriteFrame(stream, protocol.Frame{Type: protocol.TypeOK}); err != nil {
 		_ = stream.Close()
 		return
 	}
 	_ = stream.SetDeadline(time.Time{})
 	count := transport.Pipe(tcpConn, stream)
+	a.metrics.BytesClientToTarget.Add(count.BToA)
+	a.metrics.BytesTargetToClient.Add(count.AToB)
 	a.log.Info("connection_closed", "role", "agent", "agent_id", a.cfg.AgentID, "service", frame.Service, "direction", "reverse", "connection_id", frame.ConnectionID, "duration_ms", time.Since(start).Milliseconds(), "bytes_client_to_target", count.BToA, "bytes_target_to_client", count.AToB)
 }
 

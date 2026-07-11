@@ -4,6 +4,10 @@
 
 It connects one or more outbound `mule agent` processes to a `mule server`. Each TCP connection becomes one QUIC bidirectional stream. Targets are always configured locally on the side that dials them; neither side can command the other side to dial an arbitrary host or port.
 
+
+<img width="1693" height="929" alt="ChatGPT Image Jul 11, 2026, 08_46_05 PM" src="https://github.com/user-attachments/assets/a207027a-36d1-46fb-9f66-c112244cec70" />
+
+
 ## Model
 
 There are two roles:

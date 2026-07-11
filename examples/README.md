@@ -9,6 +9,22 @@ sudo mule keygen --out /etc/mule/lab.key
 
 Replace hostnames, secret paths, and target addresses for your lab. Keep listeners on `127.0.0.1` unless other machines must connect directly.
 
+## Systemd Installer
+
+`deployment/install-systemd.sh` installs the binary, creates a locked-down `mule` system user, installs or generates a shared secret, writes a basic YAML config, and enables the service. Review the generated files first with `--dry-run`:
+
+```bash
+./deployment/install-systemd.sh agent \
+  --binary ./bin/mule \
+  --server server.example.org:4400 \
+  --agent-id lab \
+  --secret-source ./lab.key \
+  --forward web=127.0.0.1:8080 \
+  --dry-run
+```
+
+Remove `--dry-run` and run with `sudo` to install. Use the same secret file on the matching server and agent. The installer refuses to replace existing config or units unless `--force` is given, and backs them up before replacement. Existing secrets are preserved; use `--rotate-secret` to generate a replacement or `--secret-source` with `--force` to import one explicitly.
+
 ## Forward
 
 Expose a server-side web service on the agent at `127.0.0.1:8080`:

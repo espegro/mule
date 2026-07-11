@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add ready-to-run YAML examples for forward, reverse, combined, multi-agent, and explicit agent-to-agent lab setups.
+- Add a systemd installer for the binary, system user, shared secret, basic YAML configuration, and hardened unit.
+- Preserve secrets across installer updates, back up replaced configuration, verify generated units, and reject unsupported privileged listeners.
 
 ## v2.0.2 - 2026-07-11
 

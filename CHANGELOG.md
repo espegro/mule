@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2.0.5 - 2026-08-28
+
 - Make plain `make` build Mule and add a one-command agent/bootstrap flow.
 - Let the server installer import multiple collected agent keys and generate the complete default multi-agent configuration.
 

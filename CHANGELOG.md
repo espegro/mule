@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v2.0.4 - 2026-08-28
+
+- Add config-first CLI help, `mule help COMMAND`, and `mule check-config`.
+- Make the systemd installer prefer validated YAML files while retaining explicit inline configuration for simple setups.
+- Align system and user systemd examples with config-file operation and run system services as the dedicated `mule` account.
+- Add one complete default-deployment walkthrough for a server-side service shared with multiple client machines.
+
 ## v2.0.3 - 2026-08-28
 
 - Add ready-to-run YAML examples for forward, reverse, combined, multi-agent, and explicit agent-to-agent lab setups.

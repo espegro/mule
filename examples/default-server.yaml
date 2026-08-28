@@ -1,0 +1,13 @@
+listen_udp: ":4400"
+idle_timeout: 1h
+keepalive: 20s
+
+agents:
+  client-a:
+    secret_file: /etc/mule/client-a.key
+    forward:
+      ollama: 127.0.0.1:11434
+  client-b:
+    secret_file: /etc/mule/client-b.key
+    forward:
+      ollama: 127.0.0.1:11434

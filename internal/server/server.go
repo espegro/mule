@@ -136,7 +136,7 @@ func New(cfg Config, log *logging.Logger, metrics *metrics.Metrics) *Server {
 
 func (s *Server) Run(ctx context.Context) error {
 	ApplyDefaults(&s.cfg)
-	if err := validateConfig(s.cfg); err != nil {
+	if err := ValidateConfig(s.cfg); err != nil {
 		return err
 	}
 	agentIDs := make([]string, 0, len(s.cfg.Agents))
@@ -299,7 +299,7 @@ func (s *Server) handleLegacyProbeConnection(ctx context.Context, agentID string
 	s.handleProbe(ctx, agentID, stream, frame, dials)
 }
 
-func validateConfig(cfg Config) error {
+func ValidateConfig(cfg Config) error {
 	if cfg.ListenUDP == "" {
 		return fmt.Errorf("listen_udp is required")
 	}

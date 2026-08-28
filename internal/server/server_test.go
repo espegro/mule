@@ -33,7 +33,7 @@ func TestValidateConfigRejectsInvalidLimits(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validTestConfig()
 			tt.mutate(&cfg)
-			if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), tt.want) {
+			if err := ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("expected %s error, got %v", tt.want, err)
 			}
 		})

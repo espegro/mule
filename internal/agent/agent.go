@@ -144,7 +144,7 @@ func New(cfg Config, secret []byte, log *logging.Logger, metrics *metrics.Metric
 
 func (a *Agent) Run(ctx context.Context) error {
 	ApplyDefaults(&a.cfg)
-	if err := validateConfig(a.cfg); err != nil {
+	if err := ValidateConfig(a.cfg); err != nil {
 		return err
 	}
 	a.metrics.ConfigureAgent(a.cfg.AgentID, a.cfg.Server)
@@ -175,7 +175,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
-func validateConfig(cfg Config) error {
+func ValidateConfig(cfg Config) error {
 	if cfg.Server == "" || cfg.AgentID == "" || cfg.SecretFile == "" {
 		return fmt.Errorf("server, agent_id and secret_file are required")
 	}

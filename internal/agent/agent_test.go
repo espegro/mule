@@ -34,7 +34,7 @@ func TestValidateConfigRejectsInvalidLimits(t *testing.T) {
 	}
 	ApplyDefaults(&cfg)
 	cfg.MaxConnections = -1
-	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "max_connections") {
+	if err := ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "max_connections") {
 		t.Fatalf("expected max_connections error, got %v", err)
 	}
 }
@@ -48,7 +48,7 @@ func TestValidateConfigRejectsNegativeTimeout(t *testing.T) {
 	}
 	ApplyDefaults(&cfg)
 	cfg.ConnectTimeout = -time.Second
-	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "connect_timeout") {
+	if err := ValidateConfig(cfg); err == nil || !strings.Contains(err.Error(), "connect_timeout") {
 		t.Fatalf("expected connect_timeout error, got %v", err)
 	}
 }
@@ -90,7 +90,7 @@ func TestValidateConfigRejectsNegativeReconnectDelay(t *testing.T) {
 		Forward:        map[string]string{"service": "127.0.0.1:3000"},
 		ReconnectDelay: -time.Second,
 	}
-	if err := validateConfig(cfg); err == nil {
+	if err := ValidateConfig(cfg); err == nil {
 		t.Fatal("expected negative reconnect delay to be rejected")
 	}
 }

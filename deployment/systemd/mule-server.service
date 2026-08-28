@@ -7,20 +7,15 @@ Wants=network-online.target
 Type=simple
 User=mule
 Group=mule
-ExecStart=/usr/local/bin/mule server \
-  --listen-udp :4400 \
-  --agent host-b=/etc/mule/host-b.key \
-  --forward web=10.20.30.40:443 \
-  --reverse ssh=127.0.0.1:2222 \
-  --log-format json
+ExecStart=/usr/local/bin/mule server --config /etc/mule/server.yaml --log-format json
 Restart=on-failure
 RestartSec=3
+RuntimeDirectory=mule
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/run/mule
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

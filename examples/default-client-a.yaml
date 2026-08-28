@@ -1,0 +1,8 @@
+server: server.example.org:4400
+agent_id: client-a
+secret_file: /etc/mule/client-a.key
+idle_timeout: 1h
+keepalive: 20s
+
+forward:
+  ollama: 127.0.0.1:10000

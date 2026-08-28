@@ -48,7 +48,7 @@ https://github.com/espegro/mule/releases
 For Linux ARM64/AArch64:
 
 ```bash
-wget -O mule https://github.com/espegro/mule/releases/download/v2.0.3/mule-linux-arm64
+wget -O mule https://github.com/espegro/mule/releases/download/v2.0.4/mule-linux-arm64
 chmod +x mule
 ./mule version
 ```
@@ -102,34 +102,107 @@ Secret requirements:
 - Unix permissions must not be group/world-readable
 - generated randomly, not human-written
 
-## Simple Forward Example
+## Default Setup: One Server, Multiple Clients
 
-Expose Ollama on the agent side while the Ollama service runs on the server side.
-
-Server:
-
-```bash
-mule server \
-  --listen-udp :4400 \
-  --agent dgx=/etc/mule/dgx.key \
-  --forward ollama=127.0.0.1:11434
-```
-
-Agent:
-
-```bash
-mule agent \
-  --server server.example.org:4400 \
-  --agent-id dgx \
-  --secret-file /etc/mule/dgx.key \
-  --forward ollama=127.0.0.1:10000
-```
-
-Clients on the agent machine can now use:
+This is the normal Mule deployment. A service such as Ollama listens only on
+the server's loopback interface. Each client runs a Mule agent and gets the
+same service on a local port:
 
 ```text
-127.0.0.1:10000 -> QUIC tunnel -> server 127.0.0.1:11434
+client-a 127.0.0.1:10000 ─┐
+                           ├─ QUIC/UDP → server.example.org:4400
+client-b 127.0.0.1:10000 ─┘                │
+                                           └─ 127.0.0.1:11434 (Ollama)
 ```
+
+This direction is called `forward`: the listener is on each agent, while the
+target is dialed locally by the server. Both clients can use port `10000`
+because they run on different machines.
+
+Each client needs a unique agent ID and unique key. The server stores both
+keys; each client receives only its matching key:
+
+```text
+server:   /etc/mule/client-a.key and /etc/mule/client-b.key
+client-a: /etc/mule/client-a.key
+client-b: /etc/mule/client-b.key
+```
+
+Generate the two keys once and securely copy each key to its matching client:
+
+```bash
+umask 077
+mule keygen --out client-a.key
+mule keygen --out client-b.key
+```
+
+Server config, `/etc/mule/server.yaml`:
+
+```yaml
+listen_udp: ":4400"
+idle_timeout: 1h
+keepalive: 20s
+
+agents:
+  client-a:
+    secret_file: /etc/mule/client-a.key
+    forward:
+      ollama: 127.0.0.1:11434
+  client-b:
+    secret_file: /etc/mule/client-b.key
+    forward:
+      ollama: 127.0.0.1:11434
+```
+
+Client A config, `/etc/mule/agent.yaml`:
+
+```yaml
+server: server.example.org:4400
+agent_id: client-a
+secret_file: /etc/mule/client-a.key
+idle_timeout: 1h
+keepalive: 20s
+
+forward:
+  ollama: 127.0.0.1:10000
+```
+
+Client B uses the same config except for its identity and key:
+
+```yaml
+server: server.example.org:4400
+agent_id: client-b
+secret_file: /etc/mule/client-b.key
+idle_timeout: 1h
+keepalive: 20s
+
+forward:
+  ollama: 127.0.0.1:10000
+```
+
+Validate and start the server:
+
+```bash
+mule check-config --role server --config /etc/mule/server.yaml
+mule server --config /etc/mule/server.yaml
+```
+
+On each client, validate and start its agent:
+
+```bash
+mule check-config --role agent --config /etc/mule/agent.yaml
+mule agent --config /etc/mule/agent.yaml
+```
+
+Applications on either client can now reach the server-side service without
+exposing Ollama directly to the network:
+
+```bash
+curl http://127.0.0.1:10000/api/tags
+```
+
+Ready-to-copy versions are in `examples/default-server.yaml`,
+`examples/default-client-a.yaml`, and `examples/default-client-b.yaml`.
 
 ## Simple Reverse Example
 
@@ -345,7 +418,25 @@ This is logging metadata only, not an authorization signal.
 
 ## Systemd
 
-System service examples:
+For a system-wide installation, prefer an existing validated config file:
+
+```bash
+sudo ./deployment/install-systemd.sh agent \
+  --binary ./bin/mule \
+  --config ./examples/default-client-a.yaml
+```
+
+The config owns agent IDs, secret paths, routes, timeouts, and limits. Secret
+paths should be absolute, and the referenced files must already exist on the
+target host. A real installation verifies every secret as the `mule` service
+user. Use `--dry-run` to validate the YAML and inspect the generated unit first.
+
+The installer creates a locked system account named `mule`; the daemon does
+not run as root. It installs the selected config as `/etc/mule/agent.yaml` or
+`/etc/mule/server.yaml`. Referenced secret files must be readable by `mule`
+and should be owned by `mule:mule` with mode `0600`.
+
+The static system service examples use the same config paths:
 
 ```text
 deployment/systemd/mule-server.service
@@ -363,9 +454,14 @@ Install a user-mode agent unit as:
 ```bash
 mkdir -p ~/.config/systemd/user ~/.config/mule
 cp deployment/systemd/mule-agent.user.service ~/.config/systemd/user/mule-agent.service
+cp examples/default-client-a.yaml ~/.config/mule/agent.yaml
+# Edit ~/.config/mule/agent.yaml and use a secret path below your home directory.
 systemctl --user daemon-reload
 systemctl --user enable --now mule-agent.service
 ```
+
+The user-mode unit runs as your login user, not as the system account `mule`.
+For a system-wide installation, use `install-systemd.sh` instead.
 
 To keep the user service running after logout:
 

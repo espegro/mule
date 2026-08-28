@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -34,10 +35,16 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		usage()
+		writeUsage(os.Stderr)
 		return errors.New("missing command")
 	}
+	if args[0] == "-h" || args[0] == "--help" {
+		writeUsage(os.Stdout)
+		return nil
+	}
 	switch args[0] {
+	case "help":
+		return runHelp(args[1:])
 	case "server":
 		return runServer(args[1:])
 	case "agent":
@@ -48,22 +55,113 @@ func run(args []string) error {
 		return runKeygen(args[1:])
 	case "check":
 		return runCheck(args[1:])
+	case "check-config":
+		return runCheckConfig(args[1:])
 	case "version":
+		if len(args) != 1 {
+			return errors.New("usage: mule version")
+		}
 		fmt.Println(version)
 		return nil
 	default:
-		usage()
+		writeUsage(os.Stderr)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: mule server|agent|probe|keygen|check|version")
+func writeUsage(w io.Writer) {
+	fmt.Fprint(w, `Mule — encrypted TCP service tunnels over QUIC/UDP.
+
+Usage:
+  mule COMMAND [options]
+  mule help [COMMAND]
+
+Commands:
+  agent         Connect to a server and expose configured services
+  server        Accept agents and enforce per-agent service policy
+  probe         Test authentication and service reachability
+  check-config  Validate an agent or server YAML configuration
+  keygen        Generate a shared secret file
+  check         Validate a shared secret file
+  version       Print the version
+
+Start with a YAML file for persistent setups:
+  mule agent --config /etc/mule/agent.yaml
+  mule server --config /etc/mule/server.yaml
+
+Run "mule help COMMAND" for command-specific options and examples.
+`)
+}
+
+func runHelp(args []string) error {
+	if len(args) == 0 {
+		writeUsage(os.Stdout)
+		return nil
+	}
+	if len(args) != 1 {
+		return errors.New("usage: mule help [COMMAND]")
+	}
+	switch args[0] {
+	case "agent":
+		return runAgent([]string{"--help"})
+	case "server":
+		return runServer([]string{"--help"})
+	case "probe":
+		return runProbe([]string{"--help"})
+	case "keygen":
+		return runKeygen([]string{"--help"})
+	case "check":
+		return runCheck([]string{"--help"})
+	case "check-config":
+		return runCheckConfig([]string{"--help"})
+	case "version":
+		fmt.Println("Usage: mule version\n\nPrint the Mule version.")
+		return nil
+	default:
+		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func setCommandUsage(fs *flag.FlagSet, text string) {
+	fs.Usage = func() {
+		output := fs.Output()
+		fmt.Fprint(output, text)
+		fmt.Fprintln(output, "\nOptions:")
+		var defaults strings.Builder
+		fs.SetOutput(&defaults)
+		fs.PrintDefaults()
+		fs.SetOutput(output)
+		formatted := strings.ReplaceAll(defaults.String(), "  -", "  --")
+		fmt.Fprint(output, formatted)
+	}
+}
+
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return flag.ErrHelp
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	return nil
 }
 
 func runServer(args []string) error {
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	setCommandUsage(fs, `Usage:
+  mule server --config FILE [runtime options]              (recommended)
+  mule server --listen-udp ADDR --agent ID=SECRET [options]
+
+Accept authenticated agents and route only explicitly configured services.
+Each agent ID needs its own secret. Only one live connection per agent ID is used.
+
+Example:
+  mule server --config /etc/mule/server.yaml
+`)
 	var cfg server.Config
 	var common config.Common
 	var configPath string
@@ -80,7 +178,13 @@ func runServer(args []string) error {
 	fs.IntVar(&cfg.MaxStreams, "max-streams", 100, "maximum concurrent streams")
 	fs.IntVar(&cfg.MaxPendingDials, "max-pending-dials", 20, "maximum concurrent target dials")
 	fs.DurationVar(&cfg.KeepAlive, "keepalive", 20*time.Second, "QUIC keepalive period")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := rejectFlagsWithConfig(fs, configPath, "agent", "dial-timeout", "forward", "handshake-timeout", "idle-timeout", "keepalive", "listen-udp", "max-pending-dials", "max-streams", "reverse"); err != nil {
 		return err
 	}
 	var err error
@@ -123,6 +227,18 @@ func runServer(args []string) error {
 func runAgent(args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	setCommandUsage(fs, `Usage:
+  mule agent --config FILE [runtime options]                (recommended)
+  mule agent --server HOST:PORT --agent-id ID --secret-file FILE \
+    (--forward SERVICE=LISTEN | --reverse SERVICE=TARGET) [options]
+
+Connect outbound to a Mule server. Forward listeners live on the agent;
+reverse targets are dialed by the agent. The agent ID and secret must match
+exactly one entry in the server configuration.
+
+Example:
+  mule agent --config /etc/mule/agent.yaml
+`)
 	var cfg agent.Config
 	var common config.Common
 	var configPath string
@@ -141,7 +257,13 @@ func runAgent(args []string) error {
 	fs.IntVar(&cfg.MaxConnections, "max-connections", 100, "maximum concurrent local TCP connections")
 	fs.DurationVar(&cfg.KeepAlive, "keepalive", 20*time.Second, "QUIC keepalive period")
 	fs.DurationVar(&cfg.ReconnectDelay, "reconnect-delay", time.Second, "delay between reconnect attempts")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if err := rejectFlagsWithConfig(fs, configPath, "agent-id", "connect-timeout", "forward", "handshake-timeout", "idle-timeout", "keepalive", "max-connections", "reconnect-delay", "reverse", "secret-file", "send-client-addr", "server"); err != nil {
 		return err
 	}
 	var err error
@@ -187,6 +309,17 @@ func runAgent(args []string) error {
 func runProbe(args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	setCommandUsage(fs, `Usage:
+  mule probe --server HOST:PORT --agent-id ID --secret-file FILE \
+    --direction forward|reverse --service SERVICE [options]
+
+Authenticate as an agent and verify that a configured service is authorized.
+A forward probe also verifies that the server can dial its configured target.
+
+Example:
+  mule probe --server server.example.org:4400 --agent-id dgx \
+    --secret-file /etc/mule/dgx.key --direction forward --service ollama
+`)
 	var serverAddr, agentID, secretFile, service, directionText string
 	var connectTimeout, handshakeTimeout, idleTimeout, keepalive time.Duration
 	fs.StringVar(&serverAddr, "server", "", "server UDP/QUIC address")
@@ -198,7 +331,10 @@ func runProbe(args []string) error {
 	fs.DurationVar(&handshakeTimeout, "handshake-timeout", 10*time.Second, "probe handshake timeout")
 	fs.DurationVar(&idleTimeout, "idle-timeout", 30*time.Second, "QUIC idle timeout")
 	fs.DurationVar(&keepalive, "keepalive", 20*time.Second, "QUIC keepalive period")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if serverAddr == "" || agentID == "" || secretFile == "" || service == "" {
@@ -359,8 +495,18 @@ func parseDirection(raw string) (protocol.Direction, error) {
 func runKeygen(args []string) error {
 	fs := flag.NewFlagSet("keygen", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	setCommandUsage(fs, `Usage:
+  mule keygen --out FILE
+
+Generate a new shared secret. The output file must not already exist.
+Use a different secret for every agent ID, and copy that agent's secret to
+the matching server configuration.
+`)
 	out := fs.String("out", "", "output secret file")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *out == "" {
@@ -372,8 +518,16 @@ func runKeygen(args []string) error {
 func runCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	setCommandUsage(fs, `Usage:
+  mule check --secret-file FILE
+
+Validate the encoding, length, file type, and permissions of a shared secret.
+`)
 	secretFile := fs.String("secret-file", "", "secret file to validate")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if *secretFile == "" {
@@ -383,6 +537,93 @@ func runCheck(args []string) error {
 		return err
 	}
 	fmt.Println("secret file ok")
+	return nil
+}
+
+func runCheckConfig(args []string) error {
+	fs := flag.NewFlagSet("check-config", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	setCommandUsage(fs, `Usage:
+  mule check-config --role agent|server --config FILE
+
+Parse a YAML configuration, reject unknown fields and invalid values, and
+verify every referenced secret file without opening network listeners.
+
+Examples:
+  mule check-config --role agent --config /etc/mule/agent.yaml
+  mule check-config --role server --config /etc/mule/server.yaml
+`)
+	role := fs.String("role", "", "configuration role: agent or server")
+	configPath := fs.String("config", "", "YAML config file")
+	skipSecrets := fs.Bool("skip-secrets", false, "validate structure without reading referenced secrets")
+	if err := parseFlags(fs, args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if *role == "" || *configPath == "" {
+		return errors.New("--role and --config are required")
+	}
+	switch *role {
+	case "agent":
+		cfg, err := agent.LoadConfig(*configPath)
+		if err != nil {
+			return fmt.Errorf("load agent config: %w", err)
+		}
+		if err := agent.ValidateConfig(cfg); err != nil {
+			return fmt.Errorf("validate agent config: %w", err)
+		}
+		if !*skipSecrets {
+			if _, err := auth.LoadSecretFile(cfg.SecretFile); err != nil {
+				return fmt.Errorf("validate agent secret: %w", err)
+			}
+		}
+	case "server":
+		cfg, err := server.LoadConfig(*configPath)
+		if err != nil {
+			return fmt.Errorf("load server config: %w", err)
+		}
+		if err := server.ValidateConfig(cfg); err != nil {
+			return fmt.Errorf("validate server config: %w", err)
+		}
+		if !*skipSecrets {
+			clients := make([]auth.ClientIdentity, 0, len(cfg.Agents))
+			for _, configuredAgent := range cfg.Agents {
+				secret, err := auth.LoadSecretFile(configuredAgent.SecretFile)
+				if err != nil {
+					return fmt.Errorf("validate secret for agent %q: %w", configuredAgent.ID, err)
+				}
+				clients = append(clients, auth.ClientIdentity{ID: configuredAgent.ID, Secret: secret})
+			}
+			if _, err := auth.MultiClientTLSConfig(clients); err != nil {
+				return fmt.Errorf("validate server identities: %w", err)
+			}
+		}
+	default:
+		return fmt.Errorf("--role must be agent or server")
+	}
+	fmt.Printf("%s config ok: %s\n", *role, *configPath)
+	return nil
+}
+
+func rejectFlagsWithConfig(fs *flag.FlagSet, configPath string, names ...string) error {
+	if configPath == "" {
+		return nil
+	}
+	disallowed := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		disallowed[name] = struct{}{}
+	}
+	var mixed []string
+	fs.Visit(func(f *flag.Flag) {
+		if _, ok := disallowed[f.Name]; ok {
+			mixed = append(mixed, "--"+f.Name)
+		}
+	})
+	if len(mixed) != 0 {
+		return fmt.Errorf("--config cannot be combined with config-owned flags: %s", strings.Join(mixed, ", "))
+	}
 	return nil
 }
 

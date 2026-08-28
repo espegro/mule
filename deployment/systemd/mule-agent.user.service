@@ -3,13 +3,7 @@ Description=Mule encrypted TCP tunnel agent
 
 [Service]
 Type=simple
-ExecStart=%h/bin/mule agent \
-  --server host-a.example.org:4400 \
-  --agent-id host-b \
-  --secret-file %h/.config/mule/host-b.key \
-  --forward ollama=127.0.0.1:10000 \
-  --reverse ssh=127.0.0.1:22 \
-  --log-format json
+ExecStart=%h/bin/mule agent --config %h/.config/mule/agent.yaml --log-format json
 Restart=on-failure
 RestartSec=3
 

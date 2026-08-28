@@ -7,21 +7,15 @@ Wants=network-online.target
 Type=simple
 User=mule
 Group=mule
-ExecStart=/usr/local/bin/mule agent \
-  --server host-a.example.org:4400 \
-  --agent-id host-b \
-  --secret-file /etc/mule/host-b.key \
-  --forward web=127.0.0.1:3100 \
-  --reverse ssh=127.0.0.1:22 \
-  --log-format json
+ExecStart=/usr/local/bin/mule agent --config /etc/mule/agent.yaml --log-format json
 Restart=on-failure
 RestartSec=3
+RuntimeDirectory=mule
 
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/run/mule
 CapabilityBoundingSet=
 AmbientCapabilities=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

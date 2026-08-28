@@ -9,21 +9,42 @@ sudo mule keygen --out /etc/mule/lab.key
 
 Replace hostnames, secret paths, and target addresses for your lab. Keep listeners on `127.0.0.1` unless other machines must connect directly.
 
+## Default Setup
+
+The default setup is one server-side service shared with multiple client
+machines. Both clients listen on their own `127.0.0.1:10000` and reach the
+same server-side Ollama service at `127.0.0.1:11434`:
+
+```text
+default-client-a :10000 ─┐
+                         ├─ QUIC/UDP → default-server → Ollama :11434
+default-client-b :10000 ─┘
+```
+
+Use these files:
+
+```text
+default-server.yaml
+default-client-a.yaml
+default-client-b.yaml
+```
+
+`client-a` and `client-b` require different keys. Each client key must match
+the corresponding `secret_file` entry on the server. See the complete
+walkthrough under “Default Setup” in the main README.
+
 ## Systemd Installer
 
-`deployment/install-systemd.sh` installs the binary, creates a locked-down `mule` system user, installs or generates a shared secret, writes a basic YAML config, and enables the service. Review the generated files first with `--dry-run`:
+`deployment/install-systemd.sh` installs the binary, creates a locked-down `mule` system user, validates and installs an existing YAML config, and enables the service. The generated unit reads `/etc/mule/agent.yaml` or `/etc/mule/server.yaml`; the daemon never runs as root. Config-file mode is recommended; referenced secrets should use absolute paths and must already exist with safe permissions. During installation, every secret is checked as the `mule` service user. Review the result first with `--dry-run`:
 
 ```bash
 ./deployment/install-systemd.sh agent \
   --binary ./bin/mule \
-  --server server.example.org:4400 \
-  --agent-id lab \
-  --secret-source ./lab.key \
-  --forward web=127.0.0.1:8080 \
+  --config ./combined-agent.yaml \
   --dry-run
 ```
 
-Remove `--dry-run` and run with `sudo` to install. Use the same secret file on the matching server and agent. The installer refuses to replace existing config or units unless `--force` is given, and backs them up before replacement. Existing secrets are preserved; use `--rotate-secret` to generate a replacement or `--secret-source` with `--force` to import one explicitly.
+Remove `--dry-run` and run with `sudo` to install. The installer refuses to replace existing config or units unless `--force` is given, and backs them up before replacement. For small setups it can still generate YAML from inline `--server`, `--agent-id`, `--forward`, and `--reverse` options; run `install-systemd.sh --help` for that compatibility mode.
 
 ## Forward
 

@@ -6,30 +6,42 @@ usage() {
 Install Mule as a systemd service.
 
 Usage:
+  install-systemd.sh agent --config FILE [options]
+  install-systemd.sh server --config FILE [options]
+
+Inline configuration (for simple setups):
   install-systemd.sh agent --server HOST:PORT --agent-id ID [options]
   install-systemd.sh server --listen-udp ADDR --agent-id ID [options]
 
 Options:
   --binary PATH          Mule binary to install (default: mule in PATH)
+  --config PATH          Existing YAML config to validate and install (recommended)
+  --metrics-listen ADDR  Enable local metrics and /status HTTP listener
+  --force                Replace existing config/unit (and imported secret)
+  --no-start             Install but do not enable/start the service
+  --dry-run              Validate and print generated files without changes
+  -h, --help             Show this help
+
+Inline configuration options:
+  --server HOST:PORT     Server address for an agent
+  --listen-udp ADDR     UDP/QUIC listen address for a server
+  --agent-id ID         Agent identity; one active connection per ID
   --secret-source PATH   Existing shared secret to install
   --forward SERVICE=ADDR Add a forward service; may be repeated
   --reverse SERVICE=ADDR Add a reverse service; may be repeated
-  --metrics-listen ADDR  Enable local metrics and /status HTTP listener
-  --force                Replace existing config/unit (and imported secret)
   --rotate-secret        Generate and install a new secret explicitly
-  --no-start             Install but do not enable/start the service
-  --dry-run              Print generated config and unit without changes
-  -h, --help             Show this help
 
 Agent example:
   sudo ./deployment/install-systemd.sh agent \
-    --server server.example.org:4400 --agent-id lab \
-    --secret-source ./lab.key --forward web=127.0.0.1:8080
+    --config ./agent.yaml --binary ./bin/mule
 
 Server example:
   sudo ./deployment/install-systemd.sh server \
-    --listen-udp :4400 --agent-id lab \
-    --secret-source ./lab.key --forward web=127.0.0.1:3000
+    --config ./server.yaml --binary ./bin/mule
+
+The config file owns agent IDs, secret paths, routes, timeouts, and limits.
+Referenced secrets should use absolute paths and must already exist on the
+target host with safe permissions.
 EOF
 }
 
@@ -37,11 +49,13 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '==> %s\n' "$*"; }
 
 [[ $# -gt 0 ]] || { usage; exit 2; }
+if [[ $1 == -h || $1 == --help ]]; then usage; exit 0; fi
 role=$1
 shift
 [[ $role == agent || $role == server ]] || die "role must be agent or server"
 
 binary=""
+config_source=""
 secret_source=""
 server_addr=""
 listen_udp=""
@@ -57,6 +71,7 @@ declare -a forwards=() reverses=()
 while [[ $# -gt 0 ]]; do
   case $1 in
     --binary) [[ $# -ge 2 ]] || die "--binary requires a value"; binary=$2; shift 2 ;;
+    --config) [[ $# -ge 2 ]] || die "--config requires a value"; config_source=$2; shift 2 ;;
     --secret-source) [[ $# -ge 2 ]] || die "--secret-source requires a value"; secret_source=$2; shift 2 ;;
     --server) [[ $# -ge 2 ]] || die "--server requires a value"; server_addr=$2; shift 2 ;;
     --listen-udp) [[ $# -ge 2 ]] || die "--listen-udp requires a value"; listen_udp=$2; shift 2 ;;
@@ -73,14 +88,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ -z $secret_source || $rotate_secret == false ]] || die "do not combine --secret-source and --rotate-secret"
-
-[[ $agent_id =~ ^[A-Za-z0-9-]{1,63}$ ]] || die "--agent-id must use 1-63 letters, digits, or hyphens"
-if [[ $role == agent ]]; then
-  [[ -n $server_addr ]] || die "agent requires --server HOST:PORT"
-  [[ ${#forwards[@]} -gt 0 || ${#reverses[@]} -gt 0 ]] || die "agent requires at least one --forward or --reverse"
+if [[ -n $config_source ]]; then
+  [[ -f $config_source ]] || die "config is not a regular file: $config_source"
+  [[ -z $secret_source && $rotate_secret == false && -z $server_addr && -z $listen_udp && -z $agent_id && ${#forwards[@]} -eq 0 && ${#reverses[@]} -eq 0 ]] || \
+    die "--config cannot be combined with inline configuration or secret options"
 else
-  [[ -n $listen_udp ]] || die "server requires --listen-udp ADDR"
+  [[ -z $secret_source || $rotate_secret == false ]] || die "do not combine --secret-source and --rotate-secret"
+  [[ $agent_id =~ ^[A-Za-z0-9-]{1,63}$ ]] || die "--agent-id must use 1-63 letters, digits, or hyphens"
+  if [[ $role == agent ]]; then
+    [[ -n $server_addr ]] || die "agent requires --config FILE or --server HOST:PORT"
+    [[ ${#forwards[@]} -gt 0 || ${#reverses[@]} -gt 0 ]] || die "inline agent configuration requires at least one --forward or --reverse"
+  else
+    [[ -n $listen_udp ]] || die "server requires --config FILE or --listen-udp ADDR"
+  fi
 fi
 
 validate_mapping() {
@@ -103,14 +123,16 @@ reject_privileged_listener() {
   local address=$1 port=${1##*:}
   (( 10#$port >= 1024 )) || die "listener port $port requires privileges removed by the systemd unit; use port 1024 or higher"
 }
-for mapping in "${forwards[@]}" "${reverses[@]}"; do validate_mapping "$mapping"; done
-if [[ $role == agent ]]; then
-  validate_port "$server_addr"
-  for mapping in "${forwards[@]}"; do reject_privileged_listener "${mapping#*=}"; done
-else
-  validate_port "$listen_udp"
-  reject_privileged_listener "$listen_udp"
-  for mapping in "${reverses[@]}"; do reject_privileged_listener "${mapping#*=}"; done
+if [[ -z $config_source ]]; then
+  for mapping in "${forwards[@]}" "${reverses[@]}"; do validate_mapping "$mapping"; done
+  if [[ $role == agent ]]; then
+    validate_port "$server_addr"
+    for mapping in "${forwards[@]}"; do reject_privileged_listener "${mapping#*=}"; done
+  else
+    validate_port "$listen_udp"
+    reject_privileged_listener "$listen_udp"
+    for mapping in "${reverses[@]}"; do reject_privileged_listener "${mapping#*=}"; done
+  fi
 fi
 [[ -z $metrics_listen ]] || { validate_port "$metrics_listen"; reject_privileged_listener "$metrics_listen"; }
 
@@ -119,11 +141,17 @@ if [[ -z $binary ]]; then
 fi
 [[ -n $binary && -x $binary ]] || die "Mule binary not found; use --binary PATH"
 binary=$(readlink -f "$binary")
+if [[ -n $config_source ]]; then
+  config_source=$(readlink -f "$config_source")
+  info "validating ${role} config ${config_source}"
+  "$binary" check-config --role "$role" --config "$config_source" --skip-secrets
+fi
 
 if [[ $dry_run == false ]]; then
   [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run)"
   [[ $(uname -s) == Linux ]] || die "system installation is supported on Linux only"
   command -v systemctl >/dev/null || die "systemctl not found"
+  command -v runuser >/dev/null || die "runuser not found"
   [[ -d /run/systemd/system ]] || die "systemd is not running"
 fi
 
@@ -161,6 +189,10 @@ render_mappings() {
 }
 
 render_config() {
+  if [[ -n $config_source ]]; then
+    cat "$config_source"
+    return
+  fi
   if [[ $role == agent ]]; then
     printf 'server: '; yaml_quote "$server_addr"; printf '\n'
     printf 'agent_id: '; yaml_quote "$agent_id"; printf '\n'
@@ -234,6 +266,9 @@ if [[ $dry_run == true ]]; then
   render_config
   printf '\n--- %s ---\n' "$unit_path"
   render_unit
+  if [[ -n $config_source ]]; then
+    printf '\nNote: referenced secrets are checked as the mule user during installation.\n'
+  fi
   exit 0
 fi
 
@@ -241,7 +276,7 @@ if [[ $force == false ]]; then
   [[ ! -e $config_path ]] || die "$config_path exists; use --force to replace it"
   [[ ! -e $unit_path ]] || die "$unit_path exists; use --force to replace it"
 fi
-if [[ -n $secret_source ]]; then
+if [[ -z $config_source && -n $secret_source ]]; then
   [[ -f $secret_source ]] || die "secret source is not a regular file: $secret_source"
   [[ ! -e $secret_path || $force == true ]] || die "$secret_path exists; use --force to replace it with --secret-source"
 fi
@@ -275,7 +310,12 @@ else
   printf 'warning: systemd-analyze not found; unit was not verified\n' >&2
 fi
 
-if [[ -n $secret_source ]]; then
+if [[ -n $config_source ]]; then
+  info "validating referenced secrets as the mule user"
+  chown root:mule "$tmp_config"
+  chmod 0640 "$tmp_config"
+  runuser --user mule -- /usr/local/bin/mule check-config --role "$role" --config "$tmp_config"
+elif [[ -n $secret_source ]]; then
   info "validating existing secret"
   secret_stage_dir=$(mktemp -d /etc/mule/.secret-stage.XXXXXX)
   tmp_secret="${secret_stage_dir}/secret.key"
@@ -314,8 +354,10 @@ if [[ $secret_changed == true ]]; then
   rmdir "$secret_stage_dir"
   secret_stage_dir=""
 fi
-chown mule:mule "$secret_path"
-chmod 0600 "$secret_path"
+if [[ -z $config_source ]]; then
+  chown mule:mule "$secret_path"
+  chmod 0600 "$secret_path"
+fi
 
 systemctl daemon-reload
 if [[ $start == true ]]; then
@@ -338,7 +380,11 @@ fi
 
 info "installed ${unit_path}"
 info "configuration: ${config_path}"
-info "shared secret: ${secret_path}"
-if [[ $secret_changed == true ]]; then
+if [[ -z $config_source ]]; then
+  info "shared secret: ${secret_path}"
+else
+  info "secret paths: managed by ${config_path}"
+fi
+if [[ -z $config_source && $secret_changed == true ]]; then
   printf 'IMPORTANT: securely copy %s to the matching peer before starting that peer.\n' "$secret_path"
 fi

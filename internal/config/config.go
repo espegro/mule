@@ -1,12 +1,16 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const DefaultRoute = "default"
@@ -60,6 +64,22 @@ type RouteListen struct {
 type Client struct {
 	ID         string
 	SecretFile string
+}
+
+func DecodeYAMLStrict(data []byte, out any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(out); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("configuration must contain exactly one YAML document")
+		}
+		return err
+	}
+	return nil
 }
 
 func MultiClientMode(cfg Exit) bool {

@@ -170,7 +170,7 @@ func assertProbe(t *testing.T, serverAddr, agentID, secretFile string, direction
 	if err != nil {
 		t.Fatal(err)
 	}
-	tlsCfg, err := auth.TLSConfigWithServerName(secret, auth.RoleForward, auth.ExitServerNameForClient(agentID))
+	tlsCfg, err := auth.TLSConfigWithServerName(secret, auth.RoleForward, auth.ProbeServerNameForClient(agentID))
 	if err != nil {
 		t.Fatal(err)
 	}

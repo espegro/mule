@@ -95,12 +95,13 @@ validate_mapping() {
 
 validate_port() {
   local address=$1 port=${1##*:}
+  [[ $address != *[[:space:]]* && $address != *\\* && $address != *\"* && $address != *\'* ]] || die "invalid characters in address: $address"
   [[ $address == *:* && $port =~ ^[0-9]+$ && $port -ge 1 && $port -le 65535 ]] || die "invalid host:port address: $address"
 }
 
 reject_privileged_listener() {
   local address=$1 port=${1##*:}
-  (( port >= 1024 )) || die "listener port $port requires privileges removed by the systemd unit; use port 1024 or higher"
+  (( 10#$port >= 1024 )) || die "listener port $port requires privileges removed by the systemd unit; use port 1024 or higher"
 }
 for mapping in "${forwards[@]}" "${reverses[@]}"; do validate_mapping "$mapping"; done
 if [[ $role == agent ]]; then
@@ -192,6 +193,11 @@ render_config() {
 }
 
 render_unit() {
+  local metrics_arg="" escaped_metrics
+  if [[ -n $metrics_listen ]]; then
+    escaped_metrics=${metrics_listen//%/%%}
+    metrics_arg=" --metrics-listen ${escaped_metrics}"
+  fi
   cat <<EOF
 [Unit]
 Description=Mule encrypted TCP tunnel ${role}
@@ -202,7 +208,7 @@ Wants=network-online.target
 Type=simple
 User=mule
 Group=mule
-ExecStart=/usr/local/bin/mule ${role} --config ${config_path} --log-format json${metrics_listen:+ --metrics-listen ${metrics_listen}}
+ExecStart=/usr/local/bin/mule ${role} --config ${config_path} --log-format json${metrics_arg}
 Restart=on-failure
 RestartSec=3
 RuntimeDirectory=mule
@@ -256,27 +262,11 @@ else
   chmod 0755 /usr/local/bin/mule
 fi
 
-if [[ -n $secret_source ]]; then
-  info "installing existing secret"
-  install -o mule -g mule -m 0600 "$secret_source" "$secret_path"
-  secret_changed=true
-elif [[ $rotate_secret == true || ! -e $secret_path ]]; then
-  info "generating new secret"
-  rm -f "$secret_path"
-  /usr/local/bin/mule keygen --out "$secret_path"
-  chown mule:mule "$secret_path"
-  chmod 0600 "$secret_path"
-  secret_changed=true
-else
-  info "preserving existing secret ${secret_path}"
-  chown mule:mule "$secret_path"
-  chmod 0600 "$secret_path"
-fi
-/usr/local/bin/mule check --secret-file "$secret_path"
-
 tmp_config=$(mktemp)
-tmp_unit=$(mktemp)
-trap 'rm -f "$tmp_config" "$tmp_unit"' EXIT
+tmp_unit=$(mktemp --suffix=.service)
+tmp_secret=""
+secret_stage_dir=""
+trap 'rm -f "$tmp_config" "$tmp_unit" "${tmp_secret:-}"; [[ -z ${secret_stage_dir:-} ]] || rmdir "$secret_stage_dir" 2>/dev/null || true' EXIT
 render_config >"$tmp_config"
 render_unit >"$tmp_unit"
 if command -v systemd-analyze >/dev/null; then
@@ -285,17 +275,56 @@ else
   printf 'warning: systemd-analyze not found; unit was not verified\n' >&2
 fi
 
-backup_suffix=$(date -u +%Y%m%d-%H%M%S)
+if [[ -n $secret_source ]]; then
+  info "validating existing secret"
+  secret_stage_dir=$(mktemp -d /etc/mule/.secret-stage.XXXXXX)
+  tmp_secret="${secret_stage_dir}/secret.key"
+  install -o mule -g mule -m 0600 "$secret_source" "$tmp_secret"
+  /usr/local/bin/mule check --secret-file "$tmp_secret"
+  secret_changed=true
+elif [[ $rotate_secret == true || ! -e $secret_path ]]; then
+  info "generating and validating new secret"
+  secret_stage_dir=$(mktemp -d /etc/mule/.secret-stage.XXXXXX)
+  tmp_secret="${secret_stage_dir}/secret.key"
+  /usr/local/bin/mule keygen --out "$tmp_secret"
+  chown mule:mule "$tmp_secret"
+  chmod 0600 "$tmp_secret"
+  /usr/local/bin/mule check --secret-file "$tmp_secret"
+  secret_changed=true
+else
+  info "preserving existing secret ${secret_path}"
+  /usr/local/bin/mule check --secret-file "$secret_path"
+fi
+
+was_active=false
+if systemctl is-active --quiet "mule-${role}.service"; then was_active=true; fi
+backup_suffix="$(date -u +%Y%m%d-%H%M%S).$$"
 if [[ $force == true ]]; then
   [[ ! -e $config_path ]] || cp -a "$config_path" "${config_path}.bak.${backup_suffix}"
   [[ ! -e $unit_path ]] || cp -a "$unit_path" "${unit_path}.bak.${backup_suffix}"
 fi
+if [[ $secret_changed == true && -e $secret_path ]]; then
+  cp -a "$secret_path" "${secret_path}.bak.${backup_suffix}"
+fi
 install -o root -g mule -m 0640 "$tmp_config" "$config_path"
 install -o root -g root -m 0644 "$tmp_unit" "$unit_path"
+if [[ $secret_changed == true ]]; then
+  mv -f "$tmp_secret" "$secret_path"
+  tmp_secret=""
+  rmdir "$secret_stage_dir"
+  secret_stage_dir=""
+fi
+chown mule:mule "$secret_path"
+chmod 0600 "$secret_path"
 
 systemctl daemon-reload
 if [[ $start == true ]]; then
-  systemctl enable --now "mule-${role}.service"
+  systemctl enable "mule-${role}.service"
+  if [[ $was_active == true ]]; then
+    systemctl restart "mule-${role}.service"
+  else
+    systemctl start "mule-${role}.service"
+  fi
   systemctl --no-pager --full status "mule-${role}.service" || true
 else
   info "installed without starting (--no-start)"
@@ -311,5 +340,5 @@ info "installed ${unit_path}"
 info "configuration: ${config_path}"
 info "shared secret: ${secret_path}"
 if [[ $secret_changed == true ]]; then
-  printf 'IMPORTANT: securely copy %s to the matching peer before starting it.\n' "$secret_path"
+  printf 'IMPORTANT: securely copy %s to the matching peer before starting that peer.\n' "$secret_path"
 fi

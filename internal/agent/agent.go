@@ -10,15 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quic-go/quic-go"
-	"gopkg.in/yaml.v3"
-
 	"github.com/espegro/mule/internal/auth"
 	"github.com/espegro/mule/internal/config"
 	"github.com/espegro/mule/internal/logging"
 	"github.com/espegro/mule/internal/metrics"
 	"github.com/espegro/mule/internal/protocol"
 	"github.com/espegro/mule/internal/transport"
+	"github.com/quic-go/quic-go"
 )
 
 const (
@@ -72,7 +70,7 @@ func LoadConfig(path string) (Config, error) {
 		return Config{}, err
 	}
 	var fc FileConfig
-	if err := yaml.Unmarshal(data, &fc); err != nil {
+	if err := config.DecodeYAMLStrict(data, &fc); err != nil {
 		return Config{}, err
 	}
 	cfg := Config{
@@ -154,6 +152,12 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	sem := make(chan struct{}, a.cfg.MaxConnections)
 	var listeners []net.Listener
+	defer func() {
+		for _, ln := range listeners {
+			_ = ln.Close()
+		}
+		a.closeConn()
+	}()
 	for service, addr := range a.cfg.Forward {
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -163,12 +167,6 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.log.Info("forward_listener_started", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "listener_address", addr)
 		go a.acceptForward(ctx, ln, service, sem)
 	}
-	defer func() {
-		for _, ln := range listeners {
-			_ = ln.Close()
-		}
-		a.closeConn()
-	}()
 	<-ctx.Done()
 	for _, ln := range listeners {
 		_ = ln.Close()
@@ -192,6 +190,12 @@ func validateConfig(cfg Config) error {
 	}
 	if cfg.ReconnectDelay <= 0 {
 		return fmt.Errorf("reconnect_delay must be positive")
+	}
+	if cfg.ConnectTimeout <= 0 || cfg.HandshakeTimeout <= 0 || cfg.IdleTimeout <= 0 || cfg.KeepAlive <= 0 {
+		return fmt.Errorf("connect_timeout, handshake_timeout, idle_timeout and keepalive must be positive")
+	}
+	if cfg.MaxConnections <= 0 {
+		return fmt.Errorf("max_connections must be positive")
 	}
 	for service, addr := range cfg.Forward {
 		if err := config.ValidateRouteID(service); err != nil {

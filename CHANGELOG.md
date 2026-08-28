@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+## v2.0.3 - 2026-08-28
+
 - Add ready-to-run YAML examples for forward, reverse, combined, multi-agent, and explicit agent-to-agent lab setups.
 - Add a systemd installer for the binary, system user, shared secret, basic YAML configuration, and hardened unit.
-- Preserve secrets across installer updates, back up replaced configuration, verify generated units, and reject unsupported privileged listeners.
+- Preserve and validate secrets atomically across installer updates, back up replaced files, verify generated units, restart active services, and reject unsupported privileged listeners.
+- Separate probe and agent TLS identities while retaining compatibility with older peers, preventing reconnects from getting stuck as probes.
+- Apply pending-dial limits only while dialing, bound reverse connections, and surface failed reverse listeners.
+- Reject unknown YAML fields, extra YAML documents, negative limits, and invalid timeout values.
+- Require Go 1.26.6 for release builds to include current standard-library security fixes.
+
 
 ## v2.0.2 - 2026-07-11
 

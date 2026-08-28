@@ -3,7 +3,7 @@ VERSION ?= dev
 GO ?= go
 GOCACHE ?= /tmp/mule-go-cache
 GOMODCACHE ?= /tmp/mule-go-mod
-MIN_SAFE_GO ?= 1.26.5
+MIN_SAFE_GO ?= 1.26.6
 
 .PHONY: check-go check-go-release build test test-race lint release
 

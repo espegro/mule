@@ -15,6 +15,7 @@ import (
 
 const ALPN = "mule-v2"
 const ExitServerName = "mule-exit"
+const ProbeServerName = "mule-probe"
 
 type ClientIdentity struct {
 	ID     string
@@ -84,6 +85,13 @@ func ExitServerNameForClient(clientID string) string {
 	return clientID + "." + ExitServerName
 }
 
+func ProbeServerNameForClient(clientID string) string {
+	if clientID == "" {
+		return ProbeServerName
+	}
+	return clientID + "." + ProbeServerName
+}
+
 func MultiClientTLSConfig(clients []ClientIdentity) (*MultiClientAuthenticator, error) {
 	if len(clients) == 0 {
 		return nil, fmt.Errorf("at least one client is required")
@@ -105,6 +113,7 @@ func MultiClientTLSConfig(clients []ClientIdentity) (*MultiClientAuthenticator, 
 			return nil, err
 		}
 		certBySNI[ExitServerNameForClient(client.ID)] = &cert
+		certBySNI[ProbeServerNameForClient(client.ID)] = &cert
 		pub, err := RolePublicKey(client.Secret, RoleForward)
 		if err != nil {
 			return nil, err
@@ -196,7 +205,7 @@ func roleCertificate(secret []byte, role Role, ca *x509.Certificate, caKey ed255
 	dnsNames := []string{"mule-" + string(role)}
 	if role == RoleExit {
 		eku = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
-		dnsNames = []string{ExitServerName, "*." + ExitServerName}
+		dnsNames = []string{ExitServerName, "*." + ExitServerName, ProbeServerName, "*." + ProbeServerName}
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,

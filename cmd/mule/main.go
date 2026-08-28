@@ -221,19 +221,26 @@ func runProbe(args []string) error {
 	if err != nil {
 		return err
 	}
-	tlsCfg, err := auth.TLSConfigWithServerName(secret, auth.RoleForward, auth.ExitServerNameForClient(agentID))
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
-	conn, err := quic.DialAddr(ctx, serverAddr, tlsCfg, &quic.Config{
-		HandshakeIdleTimeout: handshakeTimeout,
-		MaxIdleTimeout:       idleTimeout,
-		KeepAlivePeriod:      keepalive,
-	})
+	dialProbe := func(serverName string) (*quic.Conn, error) {
+		tlsCfg, err := auth.TLSConfigWithServerName(secret, auth.RoleForward, serverName)
+		if err != nil {
+			return nil, err
+		}
+		return quic.DialAddr(ctx, serverAddr, tlsCfg, &quic.Config{
+			HandshakeIdleTimeout: handshakeTimeout,
+			MaxIdleTimeout:       idleTimeout,
+			KeepAlivePeriod:      keepalive,
+		})
+	}
+	conn, err := dialProbe(auth.ProbeServerNameForClient(agentID))
 	if err != nil {
-		return err
+		probeErr := err
+		conn, err = dialProbe(auth.ExitServerNameForClient(agentID))
+		if err != nil {
+			return fmt.Errorf("probe connection failed with dedicated and compatibility identities: %v; %w", probeErr, err)
+		}
 	}
 	defer conn.CloseWithError(0, "probe complete")
 	stream, err := conn.OpenStreamSync(ctx)

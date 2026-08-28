@@ -5,17 +5,21 @@ GOCACHE ?= /tmp/mule-go-cache
 GOMODCACHE ?= /tmp/mule-go-mod
 MIN_SAFE_GO ?= 1.26.6
 
+.DEFAULT_GOAL := build
+
 .PHONY: check-go check-go-release build test test-race lint release
 
 check-go:
-	@version=`$(GO) env GOVERSION | sed 's/^go//'`; \
+	@version=`GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO) env GOVERSION | sed 's/^go//'`; \
+	if [ -z "$$version" ]; then echo "error: unable to determine Go version" >&2; exit 1; fi; \
 	first=`printf '%s\n%s\n' "$$version" "$(MIN_SAFE_GO)" | sort -V | head -n1`; \
 	if [ "$$first" != "$(MIN_SAFE_GO)" ]; then \
 		echo "warning: Go $$version has known standard-library vulnerabilities; use Go $(MIN_SAFE_GO) or newer" >&2; \
 	fi
 
 check-go-release:
-	@version=`$(GO) env GOVERSION | sed 's/^go//'`; \
+	@version=`GOCACHE=$(GOCACHE) GOMODCACHE=$(GOMODCACHE) $(GO) env GOVERSION | sed 's/^go//'`; \
+	if [ -z "$$version" ]; then echo "error: unable to determine Go version" >&2; exit 1; fi; \
 	first=`printf '%s\n%s\n' "$$version" "$(MIN_SAFE_GO)" | sort -V | head -n1`; \
 	if [ "$$first" != "$(MIN_SAFE_GO)" ]; then \
 		echo "error: release builds require Go $(MIN_SAFE_GO) or newer; found $$version" >&2; \

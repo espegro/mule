@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make plain `make` build Mule and add a one-command agent/bootstrap flow.
+- Let the server installer import multiple collected agent keys and generate the complete default multi-agent configuration.
+
 ## v2.0.4 - 2026-08-28
 
 - Add config-first CLI help, `mule help COMMAND`, and `mule check-config`.

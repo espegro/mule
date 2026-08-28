@@ -128,77 +128,71 @@ client-a: /etc/mule/client-a.key
 client-b: /etc/mule/client-b.key
 ```
 
-Generate the two keys once and securely copy each key to its matching client:
+### Install the agents
+
+Build Mule with `make`, then run this on client A:
 
 ```bash
-umask 077
-mule keygen --out client-a.key
-mule keygen --out client-b.key
+sudo ./deployment/install-systemd.sh agent \
+  --binary ./bin/mule \
+  --server server.example.org:4400 \
+  --agent-id client-a \
+  --forward ollama=127.0.0.1:10000
 ```
 
-Server config, `/etc/mule/server.yaml`:
+Run the same command on client B with `--agent-id client-b`. Each command
+creates the `mule` system user, `/etc/mule`, a unique key, `agent.yaml`, and
+the systemd service. The agent may reconnect until the server is installed;
+that is expected. After the server starts, an agent in maximum backoff can
+take up to 60 seconds to reconnect.
 
-```yaml
-listen_udp: ":4400"
-idle_timeout: 1h
-keepalive: 20s
+Securely copy the generated key from each client to a temporary directory on
+the server:
 
-agents:
-  client-a:
-    secret_file: /etc/mule/client-a.key
-    forward:
-      ollama: 127.0.0.1:11434
-  client-b:
-    secret_file: /etc/mule/client-b.key
-    forward:
-      ollama: 127.0.0.1:11434
+```text
+client A /etc/mule/client-a.key -> server /root/mule-keys/client-a.key
+client B /etc/mule/client-b.key -> server /root/mule-keys/client-b.key
 ```
 
-Client A config, `/etc/mule/agent.yaml`:
+The transfer method is up to you; use SSH/SCP or another secure channel. Do
+not send keys through chat or email.
 
-```yaml
-server: server.example.org:4400
-agent_id: client-a
-secret_file: /etc/mule/client-a.key
-idle_timeout: 1h
-keepalive: 20s
+### Install the server
 
-forward:
-  ollama: 127.0.0.1:10000
-```
-
-Client B uses the same config except for its identity and key:
-
-```yaml
-server: server.example.org:4400
-agent_id: client-b
-secret_file: /etc/mule/client-b.key
-idle_timeout: 1h
-keepalive: 20s
-
-forward:
-  ollama: 127.0.0.1:10000
-```
-
-Validate and start the server:
+After collecting the keys, run one command on the server:
 
 ```bash
-mule check-config --role server --config /etc/mule/server.yaml
-mule server --config /etc/mule/server.yaml
+sudo ./deployment/install-systemd.sh server \
+  --binary ./bin/mule \
+  --listen-udp :4400 \
+  --agent client-a=/root/mule-keys/client-a.key \
+  --agent client-b=/root/mule-keys/client-b.key \
+  --forward ollama=127.0.0.1:11434
 ```
 
-On each client, validate and start its agent:
+This creates the `mule` user and directories, imports every key as
+`mule:mule` with mode `0600`, generates `/etc/mule/server.yaml`, installs the
+hardened unit, and starts it. The shared `--forward` policy is added to every
+listed agent. Add another `--agent ID=KEYFILE` for each additional client.
+
+No user, directory, key, YAML, or systemd unit needs to be created manually.
+Only the secure collection of client keys is outside the installer.
+
+Check the result with:
 
 ```bash
-mule check-config --role agent --config /etc/mule/agent.yaml
-mule agent --config /etc/mule/agent.yaml
+systemctl status mule-server
+journalctl -u mule-server -f
+curl http://127.0.0.1:10000/api/tags  # run on either client
 ```
 
-Applications on either client can now reach the server-side service without
-exposing Ollama directly to the network:
+Use `--dry-run` on either installer command to inspect generated YAML and the
+unit without changing the machine. Existing YAML is still supported for
+advanced or customized deployments:
 
 ```bash
-curl http://127.0.0.1:10000/api/tags
+sudo ./deployment/install-systemd.sh server \
+  --binary ./bin/mule --config ./server.yaml
 ```
 
 Ready-to-copy versions are in `examples/default-server.yaml`,
@@ -418,18 +412,21 @@ This is logging metadata only, not an authorization signal.
 
 ## Systemd
 
-For a system-wide installation, prefer an existing validated config file:
+For the default system-wide installation, let the installer generate the
+config. On an agent:
 
 ```bash
 sudo ./deployment/install-systemd.sh agent \
   --binary ./bin/mule \
-  --config ./examples/default-client-a.yaml
+  --server server.example.org:4400 \
+  --agent-id client-a \
+  --forward ollama=127.0.0.1:10000
 ```
 
-The config owns agent IDs, secret paths, routes, timeouts, and limits. Secret
-paths should be absolute, and the referenced files must already exist on the
-target host. A real installation verifies every secret as the `mule` service
-user. Use `--dry-run` to validate the YAML and inspect the generated unit first.
+The complete multi-agent server command is shown in “Default Setup” above.
+Use `--config FILE` when you need settings not covered by the simple flags.
+Config secret paths should be absolute and readable by `mule`. Use `--dry-run`
+to validate YAML and inspect the generated unit first.
 
 The installer creates a locked system account named `mule`; the daemon does
 not run as root. It installs the selected config as `/etc/mule/agent.yaml` or

@@ -1,13 +1,9 @@
 # Examples
 
-Generate a separate secret for each agent before using these configurations:
-
-```bash
-sudo install -d -m 0700 /etc/mule
-sudo mule keygen --out /etc/mule/lab.key
-```
-
-Replace hostnames, secret paths, and target addresses for your lab. Keep listeners on `127.0.0.1` unless other machines must connect directly.
+The default installer creates users, directories, keys, configs, and systemd
+units. The YAML files here are for manual or advanced setups. Replace
+hostnames, secret paths, and target addresses for your lab. Keep listeners on
+`127.0.0.1` unless other machines must connect directly.
 
 ## Default Setup
 
@@ -35,16 +31,23 @@ walkthrough under “Default Setup” in the main README.
 
 ## Systemd Installer
 
-`deployment/install-systemd.sh` installs the binary, creates a locked-down `mule` system user, validates and installs an existing YAML config, and enables the service. The generated unit reads `/etc/mule/agent.yaml` or `/etc/mule/server.yaml`; the daemon never runs as root. Config-file mode is recommended; referenced secrets should use absolute paths and must already exist with safe permissions. During installation, every secret is checked as the `mule` service user. Review the result first with `--dry-run`:
+For the shortest default setup, install each agent first. Its key is generated
+at `/etc/mule/ID.key`. After securely collecting the keys on the server, pass
+all of them to one server command:
 
 ```bash
-./deployment/install-systemd.sh agent \
+sudo ./deployment/install-systemd.sh server \
   --binary ./bin/mule \
-  --config ./combined-agent.yaml \
-  --dry-run
+  --listen-udp :4400 \
+  --agent client-a=./client-a.key \
+  --agent client-b=./client-b.key \
+  --forward ollama=127.0.0.1:11434
 ```
 
-Remove `--dry-run` and run with `sudo` to install. The installer refuses to replace existing config or units unless `--force` is given, and backs them up before replacement. For small setups it can still generate YAML from inline `--server`, `--agent-id`, `--forward`, and `--reverse` options; run `install-systemd.sh --help` for that compatibility mode.
+The installer imports keys safely, generates the multi-agent config, and runs
+the daemon as the locked `mule` account. Existing YAML remains available via
+`--config FILE`. Use `--dry-run` to inspect generated files, and run
+`install-systemd.sh --help` for all options.
 
 ## Forward
 

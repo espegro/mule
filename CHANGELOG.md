@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v2.0.6 - 2026-10-10
+
+- Close active server connections during shutdown so agents can reconnect cleanly.
+- Handle short writes when sending control frames and start agent reconnect maintenance after listeners are ready.
+- Reject duplicate forward and reverse service mappings.
+
 ## v2.0.5 - 2026-08-28
 
 - Make plain `make` build Mule and add a one-command agent/bootstrap flow.

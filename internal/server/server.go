@@ -168,6 +168,7 @@ func (s *Server) Run(ctx context.Context) error {
 	defer ln.Close()
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer s.closeConnections()
 
 	errCh := make(chan error, 1)
 	reverseConnections := make(chan struct{}, s.cfg.MaxStreams)
@@ -366,6 +367,19 @@ func (s *Server) conn(agentID string) *quic.Conn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.conns[agentID]
+}
+
+func (s *Server) closeConnections() {
+	s.mu.Lock()
+	connections := make([]*quic.Conn, 0, len(s.conns))
+	for id, conn := range s.conns {
+		connections = append(connections, conn)
+		delete(s.conns, id)
+	}
+	s.mu.Unlock()
+	for _, conn := range connections {
+		_ = conn.CloseWithError(0, "server shutdown")
+	}
 }
 
 func (s *Server) handleAgent(ctx context.Context, agentID string, conn *quic.Conn, dials chan struct{}) {

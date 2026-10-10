@@ -9,6 +9,7 @@ import (
 
 	"github.com/espegro/mule/internal/auth"
 	"github.com/espegro/mule/internal/logging"
+	"github.com/espegro/mule/internal/server"
 )
 
 func TestTopLevelUsageIsConfigFirst(t *testing.T) {
@@ -43,6 +44,27 @@ func TestAgentRejectsConfigOwnedFlagsWithConfig(t *testing.T) {
 	err := runAgent([]string{"--config", "/does/not/matter.yaml", "--server", "server.example:4400"})
 	if err == nil || !strings.Contains(err.Error(), "--config cannot be combined") {
 		t.Fatalf("expected mixed config flag error, got %v", err)
+	}
+}
+
+func TestAgentRejectsDuplicateForwardMappings(t *testing.T) {
+	err := runAgent([]string{
+		"--server", "127.0.0.1:4400", "--agent-id", "test", "--secret-file", "/missing.key",
+		"--forward", "web=127.0.0.1:3000", "--forward", "web=127.0.0.1:3001",
+	})
+	if err == nil || !strings.Contains(err.Error(), `duplicate forward service "web"`) {
+		t.Fatalf("expected duplicate mapping error, got %v", err)
+	}
+}
+
+func TestServerRejectsDuplicateMappings(t *testing.T) {
+	agents := []server.AgentConfig{{ID: "test", Forward: make(map[string]string)}}
+	if err := addServerMapping(agents, "web=127.0.0.1:3000", true); err != nil {
+		t.Fatal(err)
+	}
+	err := addServerMapping(agents, "web=127.0.0.1:3001", true)
+	if err == nil || !strings.Contains(err.Error(), `duplicate forward service "web"`) {
+		t.Fatalf("expected duplicate mapping error, got %v", err)
 	}
 }
 

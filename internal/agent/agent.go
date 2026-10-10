@@ -148,7 +148,6 @@ func (a *Agent) Run(ctx context.Context) error {
 		return err
 	}
 	a.metrics.ConfigureAgent(a.cfg.AgentID, a.cfg.Server)
-	go a.maintainConnection(ctx)
 
 	sem := make(chan struct{}, a.cfg.MaxConnections)
 	var listeners []net.Listener
@@ -167,6 +166,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		a.log.Info("forward_listener_started", "role", "agent", "agent_id", a.cfg.AgentID, "service", service, "listener_address", addr)
 		go a.acceptForward(ctx, ln, service, sem)
 	}
+	go a.maintainConnection(ctx)
 	<-ctx.Done()
 	for _, ln := range listeners {
 		_ = ln.Close()

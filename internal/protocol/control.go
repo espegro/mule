@@ -81,11 +81,27 @@ func WriteFrame(w io.Writer, f Frame) error {
 	}
 	var hdr [2]byte
 	binary.BigEndian.PutUint16(hdr[:], uint16(len(body)))
-	if _, err := w.Write(hdr[:]); err != nil {
+	if err := writeFull(w, hdr[:]); err != nil {
 		return err
 	}
-	_, err := w.Write(body)
-	return err
+	return writeFull(w, body)
+}
+
+func writeFull(w io.Writer, p []byte) error {
+	for len(p) > 0 {
+		n, err := w.Write(p)
+		if n < 0 || n > len(p) {
+			return errors.New("invalid write count")
+		}
+		p = p[n:]
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
 }
 
 func ReadFrame(r io.Reader) (Frame, error) {

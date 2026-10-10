@@ -280,12 +280,18 @@ Example:
 			if err != nil {
 				return err
 			}
+			if _, exists := cfg.Forward[service]; exists {
+				return fmt.Errorf("duplicate forward service %q", service)
+			}
 			cfg.Forward[service] = addr
 		}
 		for _, raw := range reverses {
 			service, addr, err := parseServiceMapping(raw)
 			if err != nil {
 				return err
+			}
+			if _, exists := cfg.Reverse[service]; exists {
+				return fmt.Errorf("duplicate reverse service %q", service)
 			}
 			cfg.Reverse[service] = addr
 		}
@@ -454,6 +460,9 @@ func addServerMapping(agents []server.AgentConfig, raw string, forward bool) err
 				if agents[i].Forward == nil {
 					agents[i].Forward = make(map[string]string)
 				}
+				if _, exists := agents[i].Forward[service]; exists {
+					return fmt.Errorf("duplicate forward service %q for agent %q", service, agentID)
+				}
 				agents[i].Forward[service] = addr
 			} else {
 				if err := config.ValidateListenAddress(addr); err != nil {
@@ -461,6 +470,9 @@ func addServerMapping(agents []server.AgentConfig, raw string, forward bool) err
 				}
 				if agents[i].Reverse == nil {
 					agents[i].Reverse = make(map[string]string)
+				}
+				if _, exists := agents[i].Reverse[service]; exists {
+					return fmt.Errorf("duplicate reverse service %q for agent %q", service, agentID)
 				}
 				agents[i].Reverse[service] = addr
 			}
